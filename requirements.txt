@@ -1,0 +1,7 @@
+streamlit>=1.59
+pandas>=2.0
+numpy>=1.26
+altair>=5.0
+reportlab>=4.0
+openpyxl>=3.1
+vl-convert-python>=1.7
