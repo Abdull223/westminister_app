@@ -4,6 +4,7 @@ import html
 import streamlit as st
 
 from core import charts
+from core import explain
 from core import intelligence as intel
 from core.pdf_report import generate_audit_pdf
 from core.signature_pad import signature_pad
@@ -32,6 +33,7 @@ if recon:
         f"{recon['stats']['match_rate']:.1f}% of bank lines tied, bridge "
         + ("foots." if recon["stats"]["foots"] else f"does NOT foot (KES {recon['stats']['residual']:,.2f} unexplained) and qualifies the report.")
     )
+explain.page("signoff")
 
 
 def _report_chart_pngs():
@@ -167,3 +169,4 @@ with col_right:
         """,
         unsafe_allow_html=True,
     )
+    explain.signoff(ds, qualified, limitations, recon)

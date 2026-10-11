@@ -3,17 +3,21 @@ import io
 import pandas as pd
 import streamlit as st
 
+from core import explain
 from core.state import require_dataset
 
 ds = require_dataset()
 
 st.title("AI executive findings")
 st.caption("Insights, narrative and quality scoring derived directly from the ledger — nothing is hard-coded.")
+explain.page("findings")
 
 with st.container(horizontal=True):
     st.metric("Overall quality", f"{ds.quality['overall']:.1f}%", border=True)
     for name, score in ds.quality["components"].items():
         st.metric(name, f"{score:.1f}%", border=True)
+
+explain.quality(ds)
 
 st.subheader("Executive summary")
 with st.container(border=True):
@@ -46,6 +50,7 @@ st.dataframe(
         "Detail": st.column_config.TextColumn("Detail", width="large"),
     },
 )
+explain.integrity(ds)
 
 st.subheader("Synthesized findings")
 for insight in ds.insights:
@@ -54,6 +59,7 @@ for insight in ds.insights:
 st.subheader("Recommendations")
 for i, rec in enumerate(ds.recommendations, 1):
     st.markdown(f"{i}. {rec}")
+explain.insights(len(ds.insights), len(ds.recommendations), ds.stats["cell_changes"])
 
 with st.expander("AI cleaning & adjustment log", expanded=True):
     if ds.issue_log.empty:

@@ -3,6 +3,7 @@ import pandas as pd
 import streamlit as st
 
 from core import charts
+from core import explain
 from core import intelligence as intel
 from core.state import require_dataset
 
@@ -10,6 +11,7 @@ ds = require_dataset()
 
 st.title("Cash-flow dashboard")
 st.caption(f"{ds.source} · SHA-256 fingerprint `{ds.hash}`")
+explain.page("dashboard")
 
 metric = ds.schema["metric"]
 date_col = ds.schema["dates"][0] if ds.schema["dates"] else None
@@ -31,6 +33,7 @@ delta = None
 if monthly is not None and len(monthly) >= 2 and monthly[metric].iloc[-2]:
     growth = (monthly[metric].iloc[-1] - monthly[metric].iloc[-2]) / monthly[metric].iloc[-2] * 100
     delta = f"{growth:+.1f}% MoM"
+projected = float(forecast["Projected"].iloc[1]) if forecast is not None else None
 
 with st.container(horizontal=True):
     st.metric("Records analysed", f"{len(ds.clean_df):,}", border=True)
@@ -45,14 +48,15 @@ with st.container(horizontal=True):
             **({"chart_data": spark, "chart_type": "line"} if spark else {}),
         )
     if forecast is not None:
-        nxt = float(forecast["Projected"].iloc[1])
         last_actual = float(monthly[metric].iloc[-1])
         st.metric(
             "Projected next month",
-            f"KES {nxt:,.0f}",
-            delta=f"{(nxt - last_actual) / last_actual * 100:+.1f}% vs latest" if last_actual else None,
+            f"KES {projected:,.0f}",
+            delta=f"{(projected - last_actual) / last_actual * 100:+.1f}% vs latest" if last_actual else None,
             border=True,
         )
+
+explain.kpis(ds, monthly, metric, total_value, checks_ok, delta, forecast, projected)
 
 with st.form("ledger_search", border=False):
     row = st.container(horizontal=True)
@@ -63,6 +67,12 @@ if query:
     hit = ds.clean_df[(text.apply(lambda col: col.str.contains(query, case=False, na=False)).any(axis=1))]
     st.dataframe(hit, hide_index=True, height=240)
     st.caption(f"{len(hit):,} of {len(ds.clean_df):,} records match “{query}”.")
+    explain.search(hit, len(ds.clean_df), query, metric)
+else:
+    explain.band([("What this is for",
+                   "A whole-file text search, not a filter — it answers 'show me everything touching Nairobi or INV-1002' "
+                   "without building a pivot. Matched rows keep their values but are not re-totalled, so use it to find "
+                   "documents, not to prove a figure.")], "What this tells you")
 
 left, right = st.columns([1.4, 1])
 with left:
@@ -77,6 +87,7 @@ with left:
             st.altair_chart(charts.histogram(ds.clean_df, metric, f"Distribution of {metric}"))
         else:
             st.info("No numeric measure detected in this ledger.")
+        explain.trend(monthly, date_col, metric, forecast)
 with right:
     with st.container(border=True):
         if ds.schema["dims"] and metric:
@@ -89,6 +100,7 @@ with right:
             else:
                 gd = g[::-1].rename_axis("label").reset_index(name="value")
                 st.altair_chart(charts.bar_h(gd, "value", "label", f"Top 10 by {dim}"))
+            explain.breakdown(dim, g, total_value)
         else:
             st.info("No categorical dimension detected for a breakdown chart.")
 
@@ -110,6 +122,7 @@ if len(numeric_cols) >= 2 and metric:
         st.altair_chart(charts.scatter(sample, x, y, f"{y} vs {x}"))
         corr = sample[x].corr(sample[y]) if sample[x].std() and sample[y].std() else 0.0
         st.caption(f"Pearson correlation: {corr:+.2f} across {len(sample):,} rows.")
+        explain.correlation(x, y, corr, len(sample))
 else:
     st.info("At least two numeric columns are required for the correlation explorer.")
 
@@ -130,6 +143,7 @@ if var_df is not None:
             "Share %": st.column_config.NumberColumn(format="%.1f%%"),
         },
     )
+    explain.variance(var_df)
     st.download_button(
         "Download variance schedule (CSV)",
         data=show.to_csv(index=False).encode(),

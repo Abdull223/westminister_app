@@ -1,5 +1,6 @@
 import streamlit as st
 
+from core import explain
 from core import intelligence as intel
 from core.state import require_dataset
 
@@ -7,6 +8,7 @@ ds = require_dataset()
 
 st.title("Exception quarantine")
 st.caption("Rows flagged for negative values, arithmetic breaks, duplicate keys or extreme outliers. Mark rows compliant to exclude them from audit counts.")
+explain.page("quarantine")
 
 anomalies = intel.find_anomalies(ds.clean_df, ds.schema)
 
@@ -18,6 +20,8 @@ with st.container(horizontal=True):
     st.metric("Flagged rows", f"{len(anomalies):,}", border=True)
     st.metric("Awaiting review", f"{len(open_items):,}", border=True)
     st.metric("Marked compliant", f"{len(overrides):,}", border=True)
+
+explain.quarantine(anomalies, overrides, len(ds.clean_df))
 
 if open_items.empty:
     st.success("Quarantine clear — no exceptions require partner review.")

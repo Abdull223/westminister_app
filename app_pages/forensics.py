@@ -3,6 +3,7 @@
 import streamlit as st
 
 from core import charts
+from core import explain
 from core import intelligence as intel
 from core.state import require_dataset
 
@@ -10,6 +11,7 @@ ds = require_dataset()
 
 st.title("Audit forensics")
 st.caption("Fraud-oriented tests that go beyond Excel — digit-frequency forensics and double-payment detection.")
+explain.page("forensics")
 
 ben = intel.benford_check(ds.clean_df, ds.schema)
 near = intel.near_duplicates(ds.clean_df, ds.schema)
@@ -30,6 +32,7 @@ with left:
                 "Genuine transactional data follows log10(1 + 1/d): digit 1 leads ~30.1% of the time, "
                 "digit 9 only ~4.6%. Large deviations often indicate fabricated, altered or heavily rounded entries."
             )
+            explain.benford(ben)
 
 with right:
     with st.container(border=True):
@@ -56,3 +59,4 @@ with right:
                 mime="text/csv",
                 icon=":material/download:",
             )
+        explain.near_dupes(near)

@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from core import charts
+from core import explain
 from core import reconciliation as rec
 from core.data import make_sample_statement_csv
 from core.state import require_dataset
@@ -12,6 +13,7 @@ ds = require_dataset()
 
 st.title("Bank reconciliation")
 st.caption("Two-way tie-out of the audited ledger against a bank statement — every shilling paired, timed, bundled or proven absent.")
+explain.page("reconcile")
 
 stmt_bytes = st.session_state.get("stmt_bytes")
 if stmt_bytes is None:
@@ -201,6 +203,8 @@ else:
         icon=":material/report:",
     )
 
+explain.bridge(s)
+
 left, right = st.columns([1, 1.3])
 with left:
     st.subheader("Reconciliation statement")
@@ -234,6 +238,7 @@ with right:
         st.info("Nothing to plot — no value was classified yet.")
     else:
         st.altair_chart(charts.donut(split, "Value", "Category", "Value by reconciliation outcome"))
+    explain.split_donut(s)
 
 st.subheader("Findings")
 for finding in res["findings"]:
@@ -253,6 +258,7 @@ st.dataframe(
     },
 )
 st.caption("A month that ties to 100% with a large bank-minus-ledger gap is a timing backlog, not an error — the gap moves to the next period.")
+explain.monthly_tieout(res["monthly"])
 
 tab_pairs, tab_bank, tab_ledger, tab_dupes = st.tabs(
     [f"Paired items ({len(matched):,})", f"In bank, not in ledger ({len(bank_only):,})", f"In ledger, not in bank ({len(ledger_only):,})", f"Duplicate payments ({len(dupes):,})"]
@@ -342,3 +348,5 @@ with tab_dupes:
                 "Ledger amount": st.column_config.NumberColumn(format="KES %,.2f"),
             },
         )
+
+explain.exceptions(bank_only, ledger_only, dupes)

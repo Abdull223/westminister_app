@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import pandas as pd
 import streamlit as st
 
+from core import explain
 from core import intelligence as intel
 from core.cleaning import smart_clean
 from core.data import fingerprint, load_dataset
@@ -108,5 +109,6 @@ def require_dataset() -> Dataset:
         c2.caption("Cash-flow trends, category breakdowns and distribution analytics over your ledger.")
         c3.markdown("**Certified PDF sign-off**")
         c3.caption("Capture the partner signature and issue an immutable, hash-stamped executive report.")
+        explain.outputs()
         st.stop()
     return ds

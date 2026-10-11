@@ -99,6 +99,19 @@ div[data-testid="stMetricValue"]{background:linear-gradient(100deg,var(--wc-text
 .wc-hash{background:#04111e;padding:10px;border-radius:6px;font-family:monospace;
   color:var(--wc-brass);font-size:.82rem;word-break:break-all}
 hr{border-color:var(--wc-line)!important}
+
+/* ---------- explainer bands ---------- */
+.wc-note{background:linear-gradient(92deg,rgba(201,162,79,.10),rgba(12,34,56,.66) 46%);
+  border:1px solid rgba(201,162,79,.26);border-left:3px solid var(--wc-brass);border-radius:12px;
+  padding:14px 18px 12px;margin:2px 0 18px;backdrop-filter:blur(8px)}
+.wc-note b.hd{display:block;font-family:'Marcellus',serif;font-weight:400;color:var(--wc-brass);
+  font-size:.95rem;letter-spacing:.4px;margin:0 0 9px}
+.wc-note .r{display:grid;grid-template-columns:190px minmax(0,1fr);gap:14px;padding:7px 0;
+  border-top:1px solid rgba(30,58,87,.5)}
+.wc-note .r:first-of-type{border-top:0;padding-top:0}
+.wc-note .k{color:#D4AF63;font-size:.79rem;font-weight:600;line-height:1.5;padding-top:1px}
+.wc-note .v{color:#DCE6EF;font-size:.885rem;line-height:1.62}
+@media (max-width:760px){.wc-note .r{grid-template-columns:minmax(0,1fr);gap:3px}}
 </style>
 """
 
@@ -243,6 +256,20 @@ def show_splash(logo_bytes: bytes | None = None) -> None:
         return
     st.session_state.splash_shown = True
     st.markdown(_SPLASH.replace("__SRC__", logo_src(logo_bytes)), unsafe_allow_html=True)
+
+
+def note(rows, title: str = "What this tells you") -> None:
+    """A brass-edged explainer band: labelled plain-English lines under a result block.
+
+    Text is escaped because the labels carry user-supplied column and counterparty names.
+    """
+    body = "".join(
+        f'<div class="r"><span class="k">{html.escape(str(k))}</span>'
+        f'<span class="v">{html.escape(str(v))}</span></div>'
+        for k, v in rows
+    )
+    head = f'<b class="hd">{html.escape(title)}</b>' if title else ""
+    st.markdown(f'<div class="wc-note">{head}{body}</div>', unsafe_allow_html=True)
 
 
 def app_header(logo_bytes: bytes | None, user: str) -> None:
