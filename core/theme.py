@@ -66,9 +66,9 @@ div[data-testid="stVerticalBlock"]>div:nth-child(4)>*{animation-delay:.21s}
 div[data-testid="stVerticalBlock"]>div:nth-child(5)>*{animation-delay:.27s}
 div[data-testid="stVerticalBlock"]>div:nth-child(6)>*{animation-delay:.33s}
 div[data-testid="stVerticalBlock"]>div:nth-child(n+7)>*{animation-delay:.39s}
-/* A transformed ancestor captures position:fixed — exempt the splash overlay's container
-   so the intro still covers the viewport instead of collapsing into a zero-height box. */
-div[data-testid="stElementContainer"]:has(#wcs-overlay){animation:none}
+/* A transformed ancestor captures position:fixed — exempt any animated wrapper holding the
+   splash so the intro covers the viewport instead of collapsing into a zero-height box. */
+div[data-testid="stVerticalBlock"]>div:has(#wcs-overlay){animation:none}
 @media (prefers-reduced-motion: reduce){
   .stApp::before{animation:none}
   div[data-testid="stVerticalBlock"]>div[data-testid="stElementContainer"]{animation:none}}
@@ -105,11 +105,24 @@ hr{border-color:var(--wc-line)!important}
 _SPLASH = """
 <div class="wcs" id="wcs-overlay">
   <style>
+  body{--wcs-hold:4s}
   .wcs{position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;
-    justify-content:center;padding:0 18px;pointer-events:none;overflow:hidden;
+    justify-content:center;padding:0 18px;overflow:hidden;
     background:radial-gradient(ellipse 70% 55% at 50% 40%,#10304f 0%,#061625 55%,#020a12 100%);
-    animation:wcsOut .8s cubic-bezier(.4,0,.2,1) 3.9s forwards}
+    animation:wcsOut .8s cubic-bezier(.4,0,.2,1) calc(var(--wcs-hold) - .1s) forwards}
   @keyframes wcsOut{to{opacity:0;visibility:hidden;transform:scale(1.05)}}
+  /* The intro owns the screen: the app behind it stays unseen and inert until it lifts.
+     Both selector shapes are needed because the splash container may sit directly in the
+     block or inside a layout wrapper — either way nothing else may stay lit. */
+  body:has(#wcs-overlay) [data-testid="stSidebar"],
+  body:has(#wcs-overlay) header[data-testid="stHeader"],
+  body:has(#wcs-overlay) div[data-testid="stElementContainer"]:has(#wcs-overlay) ~ *,
+  body:has(#wcs-overlay) div[data-testid="stVerticalBlock"]:has(#wcs-overlay)>*:not(:has(#wcs-overlay)){
+    opacity:0;animation:wcsReveal .6s ease var(--wcs-hold) forwards}
+  @keyframes wcsReveal{to{opacity:1}}
+  /* Nothing here may be animation-only, or reduced-motion viewers would be held dark:
+     one token drives both the intro's exit and the app's reveal. */
+  @media (prefers-reduced-motion: reduce){body{--wcs-hold:2.2s}}
   .wcs::before{content:"";position:absolute;width:130vmax;height:130vmax;opacity:.07;filter:blur(2px);
     background:conic-gradient(from 0deg,transparent 0 12%,rgba(201,162,79,.7) 13% 14%,transparent 15% 37%,
       rgba(201,162,79,.5) 38% 39%,transparent 40% 62%,rgba(201,162,79,.7) 63% 64%,transparent 65% 87%,
