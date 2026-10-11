@@ -8,7 +8,7 @@ import pathlib
 import streamlit as st
 
 from core import theme
-from core.data import make_sample_csv, sheet_names
+from core.data import make_sample_csv, make_sample_statement_csv, sheet_names
 
 st.set_page_config(
     page_title="Westminister Intelligence Suite — Kenya",
@@ -39,7 +39,26 @@ def _on_upload():
 
 
 def _clear_dataset():
-    for key in ("raw_bytes", "source_name", "cert_pdf", "sheet"):
+    for key in ("raw_bytes", "source_name", "cert_pdf", "sheet", "recon_report"):
+        st.session_state.pop(key, None)
+
+
+def _load_sample_statement():
+    st.session_state.stmt_bytes = make_sample_statement_csv()
+    st.session_state.stmt_name = "sample_bank_statement.csv"
+    st.session_state.pop("stmt_sheet", None)
+
+
+def _on_stmt_upload():
+    uploaded = st.session_state.get("stmt_file")
+    if uploaded is not None:
+        st.session_state.stmt_bytes = uploaded.getvalue()
+        st.session_state.stmt_name = uploaded.name
+        st.session_state.pop("stmt_sheet", None)
+
+
+def _clear_statement():
+    for key in ("stmt_bytes", "stmt_name", "stmt_sheet", "stmt_file", "recon_report"):
         st.session_state.pop(key, None)
 
 
@@ -59,6 +78,26 @@ with st.sidebar:
         active = st.session_state["source_name"] + (f" · {st.session_state['sheet']}" if st.session_state.get("sheet") else "")
         st.caption(f"Active: {active}")
         st.button("Clear dataset", icon=":material/delete:", width="stretch", on_click=_clear_dataset)
+
+    st.divider()
+    st.markdown("### Bank statement")
+    st.file_uploader("Statement export (CSV/XLSX)", type=["csv", "xlsx"], key="stmt_file", on_change=_on_stmt_upload)
+    st.button("Load sample bank statement", icon=":material/account_balance:", width="stretch", on_click=_load_sample_statement)
+    stmt = st.session_state.get("stmt_bytes")
+    if stmt is not None:
+        stmt_sheets = sheet_names(stmt, st.session_state["stmt_name"])
+        if len(stmt_sheets) > 1:
+            if st.session_state.get("stmt_sheet") not in stmt_sheets:
+                st.session_state.stmt_sheet = stmt_sheets[0]
+            st.selectbox("Statement worksheet", stmt_sheets, key="stmt_sheet")
+            skipped = [s for s in stmt_sheets if s != st.session_state["stmt_sheet"]]
+            st.warning(
+                f"{len(skipped)} of {len(stmt_sheets)} statement worksheets are outside this reconciliation: {', '.join(skipped[:5])}",
+                icon=":material/folder_off:",
+            )
+        label = st.session_state["stmt_name"] + (f" · {st.session_state['stmt_sheet']}" if st.session_state.get("stmt_sheet") else "")
+        st.caption(f"Reconciling against: {label}")
+        st.button("Remove statement", icon=":material/delete:", width="stretch", on_click=_clear_statement)
 
     st.divider()
     with st.form("cleaning_options"):
@@ -83,6 +122,7 @@ page = st.navigation(
         st.Page("app_pages/pivot.py", title="Pivot & explore", icon=":material/pivot_table_chart:"),
         st.Page("app_pages/findings.py", title="AI findings", icon=":material/fact_check:"),
         st.Page("app_pages/forensics.py", title="Forensics", icon=":material/query_stats:"),
+        st.Page("app_pages/reconcile.py", title="Reconciliation", icon=":material/account_balance:"),
         st.Page("app_pages/quarantine.py", title="Quarantine", icon=":material/shield:"),
         st.Page("app_pages/signoff.py", title="Sign-off & PDF", icon=":material/draw:"),
     ],

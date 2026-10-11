@@ -8,9 +8,15 @@ import struct
 
 import streamlit as st
 
+# Helvetica carries no glyph for these, so they are given words instead of boxes.
+_PDF_GLYPHS = {"⚠": "WARNING — ", "✓": "pass", "✗": "fail"}
+
 
 def _esc(s) -> str:
-    return html.escape(str(s))
+    text = str(s)
+    for glyph, word in _PDF_GLYPHS.items():
+        text = text.replace(glyph, word)
+    return html.escape(text.encode("cp1252", "replace").decode("cp1252"))
 
 
 def _png_size(png: bytes) -> tuple[int, int]:
@@ -46,6 +52,7 @@ def generate_audit_pdf(
     limitations: tuple = (),
     changes: tuple = (),
     changes_truncated: bool = False,
+    recon: dict | None = None,
 ) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_LEFT
@@ -124,6 +131,8 @@ def generate_audit_pdf(
     ]
     if source_label:
         meta_rows.append(("Source audited", _esc(source_label)))
+    if recon:
+        meta_rows.append(("Bank statement tied", _esc(recon["statement"])))
     meta_rows += [
         ("Signatory partner", _esc(approver_name)),
         ("Audit timestamp", _esc(timestamp)),
@@ -212,6 +221,98 @@ def generate_audit_pdf(
     ]))
     story.append(ct)
     story.append(Spacer(1, 10))
+
+    # ---- Bank reconciliation ----
+    if recon:
+        rs, crit = recon["stats"], recon["criteria"]
+
+        def rtable(header, rows, widths, right=()):
+            data = [[Paragraph(f"<b>{h}</b>", th) for h in header]]
+            for r in rows:
+                data.append([Paragraph(_esc(v), body_style) for v in r])
+            t = Table(data, colWidths=widths)
+            style = [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0C2238")),
+                ("PADDING", (0, 0), (-1, -1), 5),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("GRID", (0, 0), (-1, -1), 0.5, border_line),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, bg_card]),
+            ]
+            for col in right:
+                style.append(("ALIGN", (col, 1), (col, -1), "RIGHT"))
+            t.setStyle(TableStyle(style))
+            return t
+
+        story.append(h2("Bank reconciliation"))
+        stmt_hash = _esc(recon["statement_hash"]).removeprefix("SHA256:")
+        story.append(Paragraph(
+            f"Every ledger line was tested against the bank statement <b>{_esc(recon['statement'])}</b> "
+            f"(SHA-256 <font name='Courier' size='7'>{stmt_hash}</font>), reading {_esc(recon['columns'])}. "
+            f"Pairing criteria: exact tolerance KES {crit['exact_tol']:,.2f}, variance {crit['var_pct']:g}%, tie-up window "
+            f"{crit['window']} day(s), timing ceiling {crit['timing_window']} day(s), bundled-settlement search "
+            f"{'on' if crit['bundle'] else 'off'}.",
+            body_style,
+        ))
+        footing = (
+            "<font color='#1E7A46'><b>FOOTS — no unexplained difference</b></font>"
+            if rs["foots"]
+            else f"<font color='#B3382C'><b>DOES NOT FOOT — KES {rs['residual']:,.2f} unexplained</b></font>"
+        )
+        story.append(card_table(
+            [
+                [Paragraph(f"<b>{k}:</b>", body_style), Paragraph(v, body_style)]
+                for k, v in (
+                    ("Bank lines reconciled", f"{rs['matched_bank']:,} of {rs['bank_lines']:,} ({rs['match_rate']:.1f}%)"),
+                    ("Ledger lines proved against the bank", f"{rs['matched_ledger']:,} of {rs['ledger_lines']:,}"),
+                    ("Bank movement with no ledger entry", f"{rs['bank_only_lines']:,} item(s) · KES {rs['bank_only_total']:,.2f}"),
+                    ("Ledger value never received by the bank", f"{rs['ledger_only_lines']:,} item(s) · KES {rs['ledger_only_total']:,.2f}"),
+                    ("Duplicate payments identified", f"{rs['duplicate_lines']:,} item(s) · KES {rs['duplicate_total']:,.2f}"),
+                    ("Value bridge", footing),
+                )
+            ],
+            [240, 280],
+        ))
+        story.append(Spacer(1, 10))
+
+        story.append(Paragraph("Value bridge — how ledger value becomes bank value", h3_style))
+        story.append(rtable(
+            ("Bridge line", "KES"),
+            [(label, f"{value:,.2f}") for label, value in recon["bridge"]],
+            [400, 110],
+            right=(1,),
+        ))
+        story.append(Paragraph(
+            "The closing line is the bank's own gross throughput, computed independently of the pairing above. "
+            "Because the bridge is derived from the same population it reconciles, a non-zero residual cannot be hidden.",
+            body_style,
+        ))
+
+        if recon["monthly"]:
+            story.append(Paragraph("Month-by-month tie-out", h3_style))
+            story.append(rtable(
+                ("Month", "Ledger value", "Bank value", "Value paired", "Tie-up"),
+                [(m, f"{lv:,.0f}", f"{bv:,.0f}", f"{pv:,.0f}", f"{tie:.1f}%") for m, lv, bv, pv, tie in recon["monthly"]],
+                [80, 110, 110, 110, 70],
+                right=(1, 2, 3, 4),
+            ))
+
+        for title, rows in (
+            ("Largest bank movements with no ledger entry", recon["exceptions"]),
+            ("Largest ledger entries never received by the bank", recon["unreceipted"]),
+        ):
+            if rows:
+                story.append(Paragraph(title, h3_style))
+                story.append(rtable(
+                    ("Source", "Date", "Narration", "KES"),
+                    [(src, dt, narr, f"{amt:,.2f}") for src, dt, narr, amt in rows],
+                    [90, 70, 250, 100],
+                    right=(3,),
+                ))
+
+        story.append(Paragraph("Reconciliation findings", h3_style))
+        for finding in recon["findings"]:
+            story.append(Paragraph(f"• {_esc(finding)}", body_style))
+        story.append(Spacer(1, 10))
 
     # ---- 5. Key observations ----
     story.append(h2("Key observations"))

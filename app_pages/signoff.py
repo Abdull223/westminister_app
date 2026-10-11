@@ -11,8 +11,27 @@ from core.state import require_dataset
 
 ds = require_dataset()
 
+# A reconciliation is only evidence about the ledger it was run against.
+recon = st.session_state.get("recon_report")
+if recon and recon.get("ledger_hash") != ds.hash:
+    recon = None
+recon_limits: tuple = ()
+if recon and not recon["stats"]["foots"]:
+    recon_limits = (
+        f"Bank reconciliation of {recon['statement']} does not foot — KES {recon['stats']['residual']:,.2f} of value is "
+        "unexplained after pairing, timing and bundling. An unreconciled bank difference is never certified.",
+    )
+qualified = ds.qualified or bool(recon_limits)
+limitations = tuple(ds.limitations) + recon_limits
+
 st.title("Partner sign-off & certified PDF")
 st.caption("Draw the partner signature, then generate the immutable executive audit report.")
+if recon:
+    st.caption(
+        f"Report includes the bank reconciliation of {recon['statement']} — "
+        f"{recon['stats']['match_rate']:.1f}% of bank lines tied, bridge "
+        + ("foots." if recon["stats"]["foots"] else f"does NOT foot (KES {recon['stats']['residual']:,.2f} unexplained) and qualifies the report.")
+    )
 
 
 def _report_chart_pngs():
@@ -54,12 +73,12 @@ with col_left:
     else:
         st.caption("No signature captured yet — the PDF will be issued in 'signature pending' state.")
 
-    if ds.qualified:
+    if qualified:
         st.error(
             "This ledger does not qualify for an unqualified certificate.",
             icon=":material/report:",
         )
-        for reason in ds.limitations:
+        for reason in limitations:
             st.caption(f"• {reason}")
         acknowledged = st.checkbox(
             "I acknowledge the scope limitations and authorise issuance of a QUALIFIED report only.",
@@ -93,10 +112,11 @@ with col_left:
             breakdown_png=breakdown_png,
             partner_title=partner_title,
             source_label=ds.source,
-            qualified=ds.qualified,
-            limitations=tuple(ds.limitations),
+            qualified=qualified,
+            limitations=limitations,
             changes=tuple(ds.change_log[["Row", "Field", "Before", "After", "Action"]].itertuples(index=False, name=None)),
             changes_truncated=bool(ds.stats["changes_truncated"]),
+            recon=recon,
         )
 
     pdf = st.session_state.get("cert_pdf")
@@ -114,18 +134,26 @@ with col_right:
     checks_ok = sum(1 for _, ok, _ in ds.checks if ok)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
     if pdf:
-        status = "QUALIFIED PDF READY — scope limitations apply" if ds.qualified else "CERTIFIED PDF READY FOR DOWNLOAD"
-        status_color = "#B3382C" if ds.qualified else "#5FB38A"
+        status = "QUALIFIED PDF READY — scope limitations apply" if qualified else "CERTIFIED PDF READY FOR DOWNLOAD"
+        status_color = "#B3382C" if qualified else "#5FB38A"
     else:
         status, status_color = "Awaiting PDF generation", "#8FA3B8"
+    if recon is None:
+        recon_line = "not performed — no bank statement reconciled"
+    else:
+        recon_line = (
+            f"{html.escape(recon['statement'])} · {recon['stats']['match_rate']:.1f}% of bank lines tied · bridge "
+            + ("foots" if recon["stats"]["foots"] else f"<b style='color:#B3382C'>does not foot</b>")
+        )
     st.markdown(
         f"""
         <div class="wc-panel" style="padding: 24px; border: 1px solid var(--wc-brass);">
             <h3 style="margin-top: 0;">Westminister Consulting</h3>
-            <p style="color: var(--wc-muted); font-size: 0.85rem;">{'CERTIFICATE OF FINANCIAL AUDIT — QUALIFIED' if ds.qualified else 'CERTIFICATE OF FINANCIAL AUDIT'}</p>
+            <p style="color: var(--wc-muted); font-size: 0.85rem;">{'CERTIFICATE OF FINANCIAL AUDIT — QUALIFIED' if qualified else 'CERTIFICATE OF FINANCIAL AUDIT'}</p>
             <hr style="border-color: var(--wc-line);">
             <p><b>Client:</b> {html.escape(client_name)}</p>
             <p><b>Source audited:</b> {html.escape(ds.source)}</p>
+            <p><b>Bank reconciliation:</b> {recon_line}</p>
             <p><b>Signatory:</b> {html.escape(approver_name)} · {html.escape(partner_title)}</p>
             <p><b>Timestamp:</b> {timestamp}</p>
             <p><b>Records processed:</b> {len(ds.clean_df):,}</p>

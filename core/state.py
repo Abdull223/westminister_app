@@ -57,7 +57,7 @@ class Dataset:
 
 
 @st.cache_data(ttl="1h", max_entries=4, show_spinner=False)
-def _analyse(raw_bytes: bytes, filename: str, opts: dict, sheet: str | None) -> dict:
+def analyse(raw_bytes: bytes, filename: str, opts: dict, sheet: str | None) -> dict:
     """Full analysis for one ledger + worksheet + cleaning profile, cached as a unit.
 
     Cached on the source bytes rather than the frames so a rerun pays a hash
@@ -89,7 +89,7 @@ def get_dataset() -> Dataset | None:
         return None
     name = st.session_state["source_name"]
     sheet = st.session_state.get("sheet")
-    parts = _analyse(raw_bytes, name, {**DEFAULT_OPTS, **st.session_state.get("clean_opts", {})}, sheet)
+    parts = analyse(raw_bytes, name, {**DEFAULT_OPTS, **st.session_state.get("clean_opts", {})}, sheet)
     if parts["raw_df"].empty:
         st.error(f"{'Worksheet “' + sheet + '”' if sheet else 'This file'} has no rows to analyse. Pick another worksheet or upload a different ledger.")
         st.stop()

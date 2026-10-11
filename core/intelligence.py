@@ -9,12 +9,23 @@ STRONG_METRIC_HINTS = ("amount", "total", "revenue", "value", "cost", "price")
 WEAK_METRIC_HINTS = ("qty", "quantity")
 KEY_HINTS = ("no", "id", "number", "ref", "code", "pin")
 
+ISO_DATE = r"^\s*\d{4}[-/]\d{1,2}(-\d{1,2})?([ T].*)?$"
+
 
 def parse_dates(s: pd.Series) -> pd.Series:
-    """Parse ledger dates, preferring day-first (dd/mm/yyyy) formats."""
-    out = pd.to_datetime(s, errors="coerce", format="mixed", dayfirst=True)
+    """Parse ledger dates.
+
+    ISO-8601 (YYYY-MM-DD) is unambiguous and must never be read day-first — doing
+    so silently swaps month and day for every date where both parts are <= 12.
+    Ambiguous formats (dd/mm/yyyy, the Kenyan bookkeeping default) read day-first.
+    """
+    text = s.astype("string").str.strip()
+    known = text.notna() & (text != "")
+    iso_share = float(text[known].str.match(ISO_DATE, na=False).mean()) if known.any() else 0.0
+    dayfirst = iso_share <= 0.5
+    out = pd.to_datetime(s, errors="coerce", format="mixed", dayfirst=dayfirst)
     if out.notna().mean() < 0.8:
-        fallback = pd.to_datetime(s, errors="coerce")
+        fallback = pd.to_datetime(s, errors="coerce", dayfirst=dayfirst)
         if fallback.notna().mean() > out.notna().mean():
             return fallback
     return out
