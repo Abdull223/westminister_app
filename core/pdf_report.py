@@ -8,6 +8,8 @@ import struct
 
 import streamlit as st
 
+from core.brief import KINDS
+
 # Helvetica carries no glyph for these, so they are given words instead of boxes.
 _PDF_GLYPHS = {"⚠": "WARNING — ", "✓": "pass", "✗": "fail"}
 
@@ -54,13 +56,14 @@ def generate_audit_pdf(
     changes_truncated: bool = False,
     recon: dict | None = None,
     tax: dict | None = None,
+    brief: dict | None = None,
 ) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_LEFT
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.platypus import HRFlowable, Image as RLImage
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=42, leftMargin=42, topMargin=40, bottomMargin=40)
@@ -78,8 +81,8 @@ def generate_audit_pdf(
 
     title_style = ParagraphStyle("DocTitle", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=21, textColor=ink, spaceAfter=2)
     sub_style = ParagraphStyle("DocSub", parent=styles["Normal"], fontName="Helvetica", fontSize=10, textColor=muted, spaceAfter=12)
-    h2_style = ParagraphStyle("SectionHeading", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13, textColor=ink, spaceBefore=12, spaceAfter=6)
-    h3_style = ParagraphStyle("SubHeading", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=11, textColor=colors.HexColor("#0C2238"), spaceBefore=8, spaceAfter=4)
+    h2_style = ParagraphStyle("SectionHeading", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=13, textColor=ink, spaceBefore=12, spaceAfter=6, keepWithNext=1)
+    h3_style = ParagraphStyle("SubHeading", parent=styles["Heading3"], fontName="Helvetica-Bold", fontSize=11, textColor=colors.HexColor("#0C2238"), spaceBefore=8, spaceAfter=4, keepWithNext=1)
     body_style = ParagraphStyle("Body", parent=styles["Normal"], fontName="Helvetica", fontSize=9.5, textColor=body_color, leading=14, spaceAfter=6, alignment=TA_LEFT)
     _section = itertools.count(1)
 
@@ -88,7 +91,7 @@ def generate_audit_pdf(
         return Paragraph(f"{next(_section)}. {title}", h2_style)
 
     def card_table(rows, col_widths):
-        t = Table(rows, colWidths=col_widths)
+        t = Table(rows, colWidths=col_widths, repeatRows=1)
         t.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), bg_card),
             ("PADDING", (0, 0), (-1, -1), 7),
@@ -96,7 +99,31 @@ def generate_audit_pdf(
             ("BOX", (0, 0), (-1, -1), 1, brass),
             ("INNERGRID", (0, 0), (-1, -1), 0.5, border_line),
         ]))
-        return t
+        return KeepTogether([t])
+
+    th = ParagraphStyle("th", parent=body_style, textColor=colors.white)
+
+    def rtable(header, rows, widths, right=(), keep=None):
+        data = [[Paragraph(f"<b>{h}</b>", th) for h in header]]
+        for r in rows:
+            data.append([Paragraph(_esc(v), body_style) for v in r])
+        t = Table(data, colWidths=widths, repeatRows=1)
+        style = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0C2238")),
+            ("PADDING", (0, 0), (-1, -1), 5),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("GRID", (0, 0), (-1, -1), 0.5, border_line),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, bg_card]),
+        ]
+        for col in right:
+            style.append(("ALIGN", (col, 1), (col, -1), "RIGHT"))
+        t.setStyle(TableStyle(style))
+        # A short table that starts at the foot of a page and breaks is the ugliest thing
+        # in a report — keep those whole. Long registers must split, so they repeat the
+        # header row instead.
+        if keep is None:
+            keep = len(rows) <= 14
+        return KeepTogether([t]) if keep else t
 
     # ---- Cover header ----
     if logo_png:
@@ -150,6 +177,44 @@ def generate_audit_pdf(
         [160, 380],
     ))
     story.append(Spacer(1, 12))
+
+    # ---- 1. Decision brief — the page a managing partner reads first ----
+    if brief:
+        story.append(h2("Decision brief"))
+        story.append(Paragraph(f"<b>{_esc(brief['verdict'])}</b>", body_style))
+        story.append(Spacer(1, 4))
+        story.append(rtable(
+            ("Headline", "Reading", "Basis"),
+            [(k, v, note) for k, v, note in brief["headlines"]],
+            [150, 120, 270],
+        ))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Decisions required", h3_style))
+        if brief["actions"]:
+            story.append(rtable(
+                ("Decision", "Amount", "What it is", "Why now", "Owner", "Due"),
+                [(a["decision"], f"KES {a['amount']:,.2f}" if a["amount"] else "—",
+                  KINDS[a["kind"]], a["why"], a["owner"], a["due"]) for a in brief["actions"]],
+                [110, 72, 72, 145, 62, 62],
+                right=(1,),
+            ))
+            story.append(Paragraph(
+                f"{brief['balance_line']} Owners and horizons are the suite's convention for a first draft and "
+                "should be reassigned by the engagement partner before the pack is circulated.",
+                body_style,
+            ))
+        else:
+            story.append(Paragraph(
+                "Nothing in this ledger triggers a decision this cycle: no unreconciled bank value, no statutory "
+                "exposure on the schedule configured, and no exception left without a reviewer.",
+                body_style,
+            ))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Watch list — not decisions yet, but each becomes one if it moves", h3_style))
+        story.append(rtable(("Indicator", "Reading", "What it means"),
+                            [(k, v, note) for k, v, note in brief["watch"]],
+                            [150, 90, 300]))
+        story.append(Spacer(1, 10))
 
     # ---- Scope limitations (qualified reports only) ----
     if qualified:
@@ -205,35 +270,17 @@ def generate_audit_pdf(
                 ("PADDING", (0, 0), (-1, -1), 6),
                 ("BACKGROUND", (0, 0), (-1, -1), colors.white),
             ]))
-            story.append(frame)
+            story.append(KeepTogether([frame]))
             story.append(Spacer(1, 10))
 
     # ---- 4. Integrity checks ----
     story.append(h2("Integrity checks"))
-    th = ParagraphStyle("th", parent=body_style, textColor=colors.white)
-
-    def rtable(header, rows, widths, right=()):
-        data = [[Paragraph(f"<b>{h}</b>", th) for h in header]]
-        for r in rows:
-            data.append([Paragraph(_esc(v), body_style) for v in r])
-        t = Table(data, colWidths=widths)
-        style = [
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0C2238")),
-            ("PADDING", (0, 0), (-1, -1), 5),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("GRID", (0, 0), (-1, -1), 0.5, border_line),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, bg_card]),
-        ]
-        for col in right:
-            style.append(("ALIGN", (col, 1), (col, -1), "RIGHT"))
-        t.setStyle(TableStyle(style))
-        return t
 
     check_rows = [[Paragraph(f"<b>{h}</b>", th) for h in ("Check", "Result", "Detail")]]
     for name, passed, detail in checks:
         verdict = f"<font color='#1E7A46'><b>PASS</b></font>" if passed else f"<font color='#B3382C'><b>FAIL</b></font>"
         check_rows.append([Paragraph(_esc(name), body_style), Paragraph(verdict, body_style), Paragraph(_esc(detail), body_style)])
-    ct = Table(check_rows, colWidths=[150, 55, 335])
+    ct = Table(check_rows, colWidths=[150, 55, 335], repeatRows=1)
     ct.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0C2238")),
         ("PADDING", (0, 0), (-1, -1), 6),
@@ -241,7 +288,7 @@ def generate_audit_pdf(
         ("GRID", (0, 0), (-1, -1), 0.5, border_line),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, bg_card]),
     ]))
-    story.append(ct)
+    story.append(KeepTogether([ct]))
     story.append(Spacer(1, 10))
 
     # ---- Bank reconciliation ----
@@ -440,7 +487,7 @@ def generate_audit_pdf(
         an_rows = [[Paragraph(f"<b>{h}</b>", th) for h in ("Row", "Reason")]]
         for idx, reason in anomalies[:25]:
             an_rows.append([Paragraph(str(idx), body_style), Paragraph(_esc(reason), body_style)])
-        at = Table(an_rows, colWidths=[50, 435])
+        at = Table(an_rows, colWidths=[50, 435], repeatRows=1)
         at.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0C2238")),
             ("PADDING", (0, 0), (-1, -1), 5),
@@ -469,7 +516,7 @@ def generate_audit_pdf(
                 Paragraph(_esc(after), body_style),
                 Paragraph(_esc(action), body_style),
             ])
-        cht = Table(ch_rows, colWidths=[32, 86, 128, 128, 106])
+        cht = Table(ch_rows, colWidths=[40, 82, 126, 126, 106], repeatRows=1)
         cht.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0C2238")),
             ("PADDING", (0, 0), (-1, -1), 5),
@@ -497,35 +544,34 @@ def generate_audit_pdf(
 
     partner_style = ParagraphStyle("PartnerName", parent=body_style, fontName="Helvetica-Bold", fontSize=15, textColor=ink, spaceAfter=0)
     role_style = ParagraphStyle("PartnerRole", parent=body_style, fontName="Helvetica-Oblique", fontSize=9, textColor=muted, spaceAfter=0)
+    stamp_style = ParagraphStyle("Stamp", parent=body_style, fontName="Helvetica-Bold", fontSize=8,
+                                 textColor=colors.HexColor("#5A6E85"), spaceAfter=0, leading=12)
 
-    sig_cell = [Paragraph("<font color='#5A6E85' size='8'><b>Wet signature</b></font>", body_style)]
+    sig_flow = [Spacer(1, 46)]
     if signature_png:
         sw, sh = _png_size(signature_png)
-        sig_cell.insert(0, RLImage(io.BytesIO(signature_png), width=170, height=170 * sh / max(sw, 1)))
-    else:
-        sig_cell.insert(0, Spacer(1, 34))
-
-    sign_block = Table(
-        [
-            [sig_cell, ""],
-            [HRFlowable(width=170, thickness=1, color=ink, spaceAfter=0), HRFlowable(width=170, thickness=1, color=ink, spaceAfter=0)],
-            [Paragraph(_esc(approver_name) or "—", partner_style), Paragraph(f"Date of certification<br/><font color='#5A6E85'>{_esc(timestamp)}</font>", role_style)],
-            [Paragraph(_esc(partner_title), role_style), Paragraph("", body_style)],
-        ],
-        colWidths=[230, 230],
-        rowHeights=[None, 8, None, None],
-    )
+        sig_flow = [RLImage(io.BytesIO(signature_png), width=178, height=178 * sh / max(sw, 1))]
+    left_cell = sig_flow + [
+        HRFlowable(width=178, thickness=1, color=ink, spaceBefore=6, spaceAfter=5),
+        Paragraph(_esc(approver_name) or "—", partner_style),
+        Paragraph(_esc(partner_title), role_style),
+    ]
+    right_cell = [
+        Paragraph("DATE OF CERTIFICATION", stamp_style),
+        Paragraph(_esc(timestamp), role_style),
+        Paragraph("Bound to the SHA-256 fingerprint of the audited ledger.", role_style),
+    ]
+    sign_block = Table([[left_cell, right_cell]], colWidths=[252, 252])
     sign_block.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
-        ("VALIGN", (0, 1), (-1, 1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 16),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 16),
         ("BACKGROUND", (0, 0), (-1, -1), bg_card),
         ("BOX", (0, 0), (-1, -1), 1, brass),
     ]))
-    story.append(sign_block)
+    story.append(KeepTogether([sign_block]))
     story.append(Spacer(1, 8))
     if signature_png and qualified:
         story.append(Paragraph("<font color='#B3382C'><b>SIGNED UNDER QUALIFICATION</b></font> — the limitations section above governs the reliance that may be placed on this report.", body_style))

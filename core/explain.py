@@ -21,8 +21,11 @@ PAGES = {
             "It answers the three questions every review asks: how much money moved, whether it is moving the "
             "right way, and whether the figures are trustworthy enough to quote.",
         "How to read it":
-            "The tiles at the top are the headlines; the charts below explain why they moved. Nothing is typed in "
-            "by hand — every figure is computed from the ledger in the sidebar, so two readers always get the same answer.",
+            "The tiles at the top are the headlines; the four tabs below are the readings a management pack is built "
+            "from — liquidity and its projection, who the value sits with, when it moves (a control question as much "
+            "as an operational one), and how much of it is unusual. Each tab carries its own explanation of what the "
+            "chart is worth and where it misleads. Nothing is typed in by hand — every figure is computed from the "
+            "ledger in the sidebar, so two readers always get the same answer.",
         "What it becomes":
             "Section 3 of the certified report (cash-flow dashboard, printed with the charts) and the source of the "
             "quality and record counts quoted on the cover.",
@@ -144,7 +147,7 @@ def outputs() -> None:
 
 # ---------- helpers ----------
 
-def _money(value) -> str:
+def money(value) -> str:
     v = float(value or 0.0)
     a = abs(v)
     sign = "-" if v < 0 else ""
@@ -178,7 +181,7 @@ def kpis(ds, monthly, metric, total_value: float, checks_ok: int, delta, forecas
         avg = total_value / n if n else 0.0
         rows.append((
             "The headline",
-            f"{n:,} records carrying {_money(total_value)} of value — about {_money(avg)} per transaction. "
+            f"{n:,} records carrying {money(total_value)} of value — about {money(avg)} per transaction. "
             "That average is the useful part: if it drifts month to month, the mix of business changed rather than the volume."))
     score = ds.quality["overall"]
     tone = (
@@ -196,7 +199,7 @@ def kpis(ds, monthly, metric, total_value: float, checks_ok: int, delta, forecas
         last = float(monthly[metric].iloc[-1])
         basis = "above" if projected > last else "below"
         rows.append(("The projection",
-                     f"The straight-line fit points at {_money(projected)} next month, {basis} the most recent actual. "
+                     f"The straight-line fit points at {money(projected)} next month, {basis} the most recent actual. "
                      "It extends the average slope of the history you have — treat it as a planning range, not a forecast to commit."))
     band(rows, "What the headline tiles tell you")
 
@@ -216,8 +219,8 @@ def trend(monthly, date_col, metric, forecast) -> None:
     else:
         rows.append((
             "Shape of the year",
-            f"{len(monthly)} months of activity ({span}). Peak {_month(monthly[date_col].iloc[hi])} at {_money(y.iloc[hi])}, "
-            f"trough {_month(monthly[date_col].iloc[lo])} at {_money(y.iloc[lo])} — a "
+            f"{len(monthly)} months of activity ({span}). Peak {_month(monthly[date_col].iloc[hi])} at {money(y.iloc[hi])}, "
+            f"trough {_month(monthly[date_col].iloc[lo])} at {money(y.iloc[lo])} — a "
             f"{abs(y.iloc[hi] - y.iloc[lo]) / max(abs(y.mean()), 1) * 100:.0f}% swing around the average, which is what "
             "a cash planner has to fund."))
         if first:
@@ -245,7 +248,7 @@ def breakdown(dim, g, total) -> None:
     top3 = float(g.head(3).sum()) / total * 100
     rows = [(
         "Where the value concentrates",
-        f"By {dim.lower()}, the largest group is “{top_name}” at {_money(top_val)} — {share:.1f}% of the ledger. "
+        f"By {dim.lower()}, the largest group is “{top_name}” at {money(top_val)} — {share:.1f}% of the ledger. "
         f"The top three together are {top3:.1f}% of everything.")]
     if share >= 40:
         rows.append(("Why it matters",
@@ -263,6 +266,162 @@ def breakdown(dim, g, total) -> None:
                  "Switch to Donut when presenting the split, Bar when the names matter more than the share, and take it "
                  "to Pivot & explore when you need the same cut by a second dimension."))
     band(rows, "What the split tells you")
+
+
+def dash_liquidity(dash) -> None:
+    """Liquidity tab: what the cash line is actually saying about running out of room."""
+    rows = []
+    months, avg = dash.get("months", 0), float(dash.get("avg_month") or 0.0)
+    if not months:
+        band([("Not enough history",
+               "Cash cannot be sequenced without at least two dated months of activity. Everything on this tab is "
+               "arithmetic on what the file holds, so an empty file produces an empty tab rather than a guess.")],
+             "What this dashboard tells you")
+        return
+    if dash.get("peak") and dash.get("trough") and avg:
+        spread = (dash["peak"][1] - dash["trough"][1]) / avg * 100
+        rows.append(("How hard it swings",
+                     f"{months} months of activity, averaging {money(avg)} a month. The gap between the best month "
+                     f"({dash['peak'][0]}, {money(dash['peak'][1])}) and the worst ({dash['trough'][0]}, "
+                     f"{money(dash['trough'][1])}) is {spread:.0f}% of that average — and a business is funded through "
+                     "the worst month, not the average one."))
+    if dash.get("trend_pct") is not None:
+        up = dash["trend_pct"] >= 0
+        rows.append(("Direction of travel",
+                     f"Latest month ({dash['last_month']}) is {abs(dash['trend_pct']):.1f}% "
+                     f"{'above' if up else 'below'} the month before it. "
+                     + ("One month is not a trend — confirm it against the variance table below before treating it as a turn."
+                        if up else
+                        "If the next month repeats this, the question is a cost or collection question, and it is asked "
+                        "now rather than at the next close.")))
+    if dash.get("projected") is not None and avg:
+        gap = (dash["projected"] - avg) / avg * 100
+        rows.append(("What the fit expects",
+                     f"The straight-line projection puts next month at {money(dash['projected'])} — {abs(gap):.0f}% "
+                     f"{'above' if gap >= 0 else 'below'} the historical average. It is a trend line drawn on the months "
+                     "in this file: it knows nothing about a contract won, a customer lost or a rate change, and it is "
+                     "not a budget."))
+    rows.append(("What to do with it",
+                 "This is the page a lender or a board reads first. If the weakest month is below what payroll and "
+                 "supplier terms require, the decision is about timing — collections, facilities or payment terms — "
+                 "and the schedule on the Income & concentration tab says which name to start with."))
+    band(rows, "What this dashboard tells you")
+
+
+def dash_concentration(dash, dim, g, total) -> None:
+    """Concentration tab: who the money sits with, and what that costs if they move."""
+    if g is None or not len(g) or not total:
+        return
+    top = g.iloc[0]
+    top3 = float(g.head(3).sum())
+    named = next((x for x in dash.get("groups", []) if x["dim"] == str(dim)), None)
+    rows = [(
+        "Spread of value",
+        f"{len(g):,} group(s) shown out of {named['rows']:,} in the file by {str(dim).lower()}. The largest is "
+        f"“{str(g.index[0])}” at {money(top)} ({top / total * 100:.1f}%), and the top three carry "
+        f"{top3 / total * 100:.1f}% of all value.")]
+    share3 = top3 / total * 100
+    if share3 >= 60:
+        rows.append(("The exposure",
+                     "Three names carry six in every ten shillings. That is a credit decision, not a presentation "
+                     "point: their payment behaviour is your cash-flow behaviour, and one of them leaving changes the "
+                     "business. Set credit limits, insure or diversify, and do not let the monthly pack keep showing a "
+                     "healthy total that depends on three invoices."))
+    elif share3 >= 35:
+        rows.append(("The exposure",
+                     "Concentrated but defensible. Watch whether the top three's share rises month on month — a "
+                     "growing concentration is how the next problem gets built quietly."))
+    else:
+        rows.append(("The exposure",
+                     "Well spread. No single counterparty can move the result on its own, which is the position worth "
+                     "protecting as the book grows."))
+    if named and named["rows"] <= 3:
+        rows.append(("Before you act on it",
+                     f"{str(dim).upper()} only takes {named['rows']} distinct value(s) in this file, so this is closer to a "
+                     "total than a breakdown. Group by a column with more variety — a party, category or branch — "
+                     "before reading concentration into it."))
+    rows.append(("What to do with it",
+                 "Take the largest name to Bank reconciliation to prove its receipts actually arrived, then to Pivot & "
+                 "explore for the same cut by month. Value that is concentrated and unverified is the two things a "
+                 "reviewer asks about first."))
+    band(rows, "What this dashboard tells you")
+
+
+def dash_timing(dash, busiest, n) -> None:
+    """Timing tab: when value is posted, which is a control question as much as an operational one."""
+    rows = []
+    weekend, month_end = dash.get("weekend_share"), dash.get("month_end_share")
+    if weekend is None and month_end is None:
+        return
+    if weekend is not None:
+        rows.append(("Outside business hours",
+                     f"{weekend:.1f}% of value is posted on a Saturday or Sunday across {n:,} dated line(s). "
+                     + ("Normal for retail, fuel and hospitality; for an office ledger it usually means entries are being "
+                        "batched after the fact rather than captured as they happen."
+                        if weekend < 15 else
+                        "That is high. Weekend postings are where authorisation controls are weakest and back-dating is "
+                        "easiest, so sample the largest of them and check who approved them.")))
+    if month_end is not None:
+        rows.append(("Against the cut-off",
+                     f"{month_end:.1f}% of value falls in the last six days of a month. Some clustering is expected — "
+                     "invoices are raised at month end — but a heavy tail is the classic shape of revenue pulled forward "
+                     "or costs deferred across a period boundary."))
+    if busiest is not None and len(busiest):
+        rows.append(("Rhythm",
+                     f"{str(busiest.iloc[0]['Weekday'])} carries the most value ({money(busiest.iloc[0]['v'])}), "
+                     f"{str(busiest.iloc[-1]['Weekday'])} the least ({money(busiest.iloc[-1]['v'])}). Payment-run days "
+                     "show as spikes; a control calendar should expect them rather than be surprised by them."))
+    rows.append(("What to do with it",
+                 "Read the dark cells against the exception queue: an unusual day is only a finding if the documents "
+                 "behind it were not reviewed. This is the tab that decides what to sample."))
+    band(rows, "What this dashboard tells you")
+
+
+def dash_value(dash, ds, anomalies_n) -> None:
+    """Value & risk tab: the shape of the numbers and how much of them is unusual."""
+    rows = []
+    negatives, neg_total = dash.get("negatives", 0), float(dash.get("negatives_total") or 0.0)
+    if negatives:
+        rows.append(("Reversals and credits",
+                     f"{negatives:,} line(s) carry a negative value, worth {money(neg_total)}. In a sales ledger those "
+                     "are credit notes, refunds or corrections; in a purchase ledger they are supplier credits. Either "
+                     "way they net against the headline figure, so a report that quotes only the total is quoting the "
+                     "net of two opposite flows."))
+    else:
+        rows.append(("Reversals and credits",
+                     "No negative lines: nothing in this file reverses or refunds, which is unusual for a live ledger "
+                     "and worth confirming rather than celebrating."))
+    flagged = int(anomalies_n or 0)
+    rows.append(("Statistical outliers",
+                 f"{flagged:,} row(s) sit outside the range the rest of the file supports and are held in Quarantine "
+                 "for a named decision. They stay in the analytics until someone releases them, because deleting an "
+                 "inconvenient row is not a cleaning step." if flagged else
+                 "No row sits outside the range the rest of the file supports. That is a statement about this file's "
+                 "shape, not a guarantee about its contents."))
+    rows.append(("Distribution, not average",
+                 "The histogram shows where value actually sits. When the bulk of lines are small and a handful are "
+                 "enormous, an average describes nothing: test the tall bars by hand and let the rest be governed by "
+                 "a threshold."))
+    rows.append(("What to do with it",
+                 "This is the tab that sets the sample. Take the flagged and negative rows to Quarantine and Audit "
+                 "forensics, and use the correlation panel to check that two measures move together the way the "
+                 "business believes they do — quantity times price, for example."))
+    band(rows, "What this dashboard tells you")
+
+
+def brief_band() -> None:
+    """How to read the decision brief, in the same words on screen and in the PDF."""
+    band([
+        ("Why it is first",
+         "A management report that buries the ask on page six does not get acted on. This page carries the numbers a "
+         "decision turns on, and every line states what it is worth, who owns it and when it is due."),
+        ("Where the amounts come from",
+         "Nothing here is typed. Each figure is lifted from the reconciliation, the tax health check or the cash-flow "
+         "reading of this exact file, and the SHA-256 fingerprint on the cover binds the brief to it."),
+        ("What is not here",
+         "Opinion about the market, the client's strategy or anything outside the ledger. Owners and dates are the "
+         "convention this suite applies — rename them to your structure before the pack goes out."),
+    ], "How to read the decision brief")
 
 
 def correlation(x, y, corr, n) -> None:
@@ -301,7 +460,7 @@ def search(hit, total: int, query: str, metric) -> None:
     value = float(pd.to_numeric(hit[metric], errors="coerce").sum()) if metric and metric in hit.columns else 0.0
     rows = [(
         "What matched",
-        f"{n:,} of {total:,} records ({n / max(total, 1) * 100:.1f}%) contain “{query}”, carrying {_money(value)} of "
+        f"{n:,} of {total:,} records ({n / max(total, 1) * 100:.1f}%) contain “{query}”, carrying {money(value)} of "
         "value. Quote the value, not the row count — the count only says how wide the search was.")]
     if n == total:
         rows.append(("Careful", "Every record matched, so this term discriminates nothing. Narrow it."))
@@ -318,8 +477,8 @@ def variance(var_df) -> None:
         down = v.loc[v["Change"].idxmin()]
         rows.append((
             "What the board asks",
-            f"The largest month-on-month jump was {_money(up['Change'])} in {up['Month']}; the deepest fall was "
-            f"{_money(down['Change'])} in {down['Month']}. Those two months are where the explanation is owed."))
+            f"The largest month-on-month jump was {money(up['Change'])} in {up['Month']}; the deepest fall was "
+            f"{money(down['Change'])} in {down['Month']}. Those two months are where the explanation is owed."))
         swing = pd.to_numeric(v["Change %"], errors="coerce").abs().max()
         if pd.notna(swing):
             rows.append((
@@ -428,7 +587,7 @@ def near_dupes(near) -> None:
     value = float(near["Amount"].abs().sum())
     band([
         ("What you are looking at",
-         f"{groups} group(s) covering {records} records and {_money(value)}, where the same party received the same "
+         f"{groups} group(s) covering {records} records and {money(value)}, where the same party received the same "
          "amount more than once under separate document numbers."),
         ("Why it is a red flag",
          "Paying an invoice twice is the most common real cash loss in a payables process, and splitting one purchase "
@@ -546,7 +705,7 @@ def bridge(s) -> None:
     if bank_only:
         rows.append((
             "In the bank, not in the ledger",
-            f"{s['bank_only_lines']:,} item(s) worth {_money(bank_only)} of real money moved that the books do not "
+            f"{s['bank_only_lines']:,} item(s) worth {money(bank_only)} of real money moved that the books do not "
             "mention. This is the serious direction of miss: it is understated turnover, it is what a tax authority "
             "finds first, and every line needs either a booking or an explanation."))
     else:
@@ -555,7 +714,7 @@ def bridge(s) -> None:
     if ledger_only:
         rows.append((
             "In the ledger, not in the bank",
-            f"{s['ledger_only_lines']:,} item(s) worth {_money(ledger_only)} the books claim but the bank never saw. "
+            f"{s['ledger_only_lines']:,} item(s) worth {money(ledger_only)} the books claim but the bank never saw. "
             "Either it is still outstanding — which makes it a collection problem and a receivable — or it was recorded "
             "against a payment that never happened."))
     else:
@@ -565,18 +724,18 @@ def bridge(s) -> None:
         rows.append((
             "Duplicate bank items",
             f"{s['duplicate_lines']:,} bank item(s) repeating a payment already settled, worth "
-            f"{_money(s['duplicate_total'])}. This is recoverable cash and the fastest win on the page."))
+            f"{money(s['duplicate_total'])}. This is recoverable cash and the fastest win on the page."))
     if s["foots"]:
         rows.append((
             "The bridge",
-            f"Starting from ledger value {_money(s['ledger_total'])} and walking it to the bank's own movement of "
-            f"{_money(s['bank_total'])} leaves {_money(s['residual'])} unexplained. Every shilling sits in exactly one "
+            f"Starting from ledger value {money(s['ledger_total'])} and walking it to the bank's own movement of "
+            f"{money(s['bank_total'])} leaves {money(s['residual'])} unexplained. Every shilling sits in exactly one "
             "line of that bridge, which is what makes it a control rather than a plug — and it is the condition the "
             "certificate depends on."))
     else:
         rows.append((
             "The bridge",
-            f"{_money(s['residual'])} of value cannot be placed. Until it can, this reconciliation is not evidence of "
+            f"{money(s['residual'])} of value cannot be placed. Until it can, this reconciliation is not evidence of "
             "anything and no report built on it can be signed unqualified."))
     band(rows)
 
@@ -701,8 +860,8 @@ def tax_vat(vat) -> None:
     if basis == "derived":
         band([
             ("A shape, not a return",
-             f"Output VAT of {_money(vat['vat_derived'])} here is a derived figure: the ledger has no VAT column, so the "
-             f"engine took {_money(vat['gross_inclusive'])} of gross value across {vat['rows_tested']:,} lines and "
+             f"Output VAT of {money(vat['vat_derived'])} here is a derived figure: the ledger has no VAT column, so the "
+             f"engine took {money(vat['gross_inclusive'])} of gross value across {vat['rows_tested']:,} lines and "
              "backed tax out of all of it at the configured rate. That is a legitimate scoping number — it says what "
              "the order of magnitude is if everything was standard-rated — and it is not a figure anybody filed, so "
              "it must not appear in an objection or a refund claim as though it did."),
@@ -734,14 +893,14 @@ def tax_vat(vat) -> None:
         if vat["under_declared"]:
             rows.append((
                 "Under-declared — the direction KRA assesses",
-                f"{_money(vat['under_declared'])} of VAT was charged as less than the rate required, or not charged "
+                f"{money(vat['under_declared'])} of VAT was charged as less than the rate required, or not charged "
                 "where it should have been. This is the number that grows penalties and interest, and it is the "
                 "number a self-assessment disclosure has to cover."),
             )
         if vat["over_declared"]:
             rows.append((
                 "Over-declared — the direction nobody chases",
-                f"{_money(vat['over_declared'])} of VAT was booked above what the rate supports. That is not a "
+                f"{money(vat['over_declared'])} of VAT was booked above what the rate supports. That is not a "
                 "penalty risk, it is cash: output VAT charged to customers and never properly owed, or input VAT "
                 "understated on a line that should have carried more. Fixing the schedule should recover it, and a "
                 "health check that only reported the first direction would be an argument for the tax authority."),
@@ -764,7 +923,7 @@ def tax_control(control) -> None:
     rows = [(
         "Why this schedule exists",
         f"The VAT control account is the monthly position — output VAT less input VAT, restated from the ledger into "
-        f"return periods. Summed over {control['months']} month(s) it comes to {_money(control['net_total'])}, "
+        f"return periods. Summed over {control['months']} month(s) it comes to {money(control['net_total'])}, "
         + ("a net payable: VAT collected and owed." if control["net_total"] >= 0 else "net recoverable: VAT paid and "
            "never claimed back.") + " This is the figure a filed return has to agree with. If it does not, the "
         "difference is either a posting error in the ledger or a return made on something else."),
@@ -809,8 +968,8 @@ def tax_wht(wht) -> None:
     if len(wht["table"]):
         rows.append((
             "The shortfall",
-            f"{len(wht['table']):,} line(s) fall short of the required withholding by {_money(wht['unwithheld'])} in "
-            f"total, against {_money(wht['declared_total'])} actually deducted."
+            f"{len(wht['table']):,} line(s) fall short of the required withholding by {money(wht['unwithheld'])} in "
+            f"total, against {money(wht['declared_total'])} actually deducted."
             + (" The ledger carries a withholding column, so these are declared-versus-expected differences on named "
                "documents — the strongest form of this finding."
                if wht["basis"] == "declared" else
@@ -933,9 +1092,9 @@ def tax_exposure(exp, vat, wht) -> None:
     rates = exp.get("rates") or {}
     rows = [
         ("What this number is",
-         f"A provisioning and negotiating figure, not an assessment: {_money(exp['tax'])} of tax at risk, "
-         f"{_money(exp['penalty'])} of penalty and {_money(exp['interest'])} of interest over "
-         f"{exp['months']:g} month(s) outstanding, totalling {_money(exp['total'])}. Nobody has assessed this and no "
+         f"A provisioning and negotiating figure, not an assessment: {money(exp['tax'])} of tax at risk, "
+         f"{money(exp['penalty'])} of penalty and {money(exp['interest'])} of interest over "
+         f"{exp['months']:g} month(s) outstanding, totalling {money(exp['total'])}. Nobody has assessed this and no "
          "penalty has been imposed. Its value is that it is defensible arithmetic, so a client can decide what to "
          "disclose and what to provide for before an audit sets both for them."),
         ("Which assumptions are yours, not the engine's",
@@ -945,9 +1104,9 @@ def tax_exposure(exp, vat, wht) -> None:
          "either and this total moves, so quote the total with the assumptions attached — and re-check them against "
          "the current law for the period in question, which this suite does not and cannot know."),
         ("What is deliberately not netted off",
-         f"Under-declared VAT of {_money(vat.get('under_declared', 0.0))} is carried at full value even where this "
-         f"same file also shows {_money(vat.get('over_declared', 0.0))} over-declared, and withholding of "
-         f"{_money(wht.get('unwithheld', 0.0))} is added rather than offset. An authority assesses the shortfalls and "
+         f"Under-declared VAT of {money(vat.get('under_declared', 0.0))} is carried at full value even where this "
+         f"same file also shows {money(vat.get('over_declared', 0.0))} over-declared, and withholding of "
+         f"{money(wht.get('unwithheld', 0.0))} is added rather than offset. An authority assesses the shortfalls and "
          "leaves you to claim the overpayments separately, in a different process, often on a time limit. A total "
          "that netted the two would flatter the position."),
     ]
@@ -981,7 +1140,7 @@ def signoff(ds, qualified: bool, limitations, recon, tax=None) -> None:
                      "converts the report from 'the books agree with themselves' to 'the books agree with the bank'."))
     else:
         rows.append(("Reconciliation status",
-                     f"The bridge does not foot ({_money(recon['stats']['residual'])} unexplained), so the report "
+                     f"The bridge does not foot ({money(recon['stats']['residual'])} unexplained), so the report "
                      "carries that as a written limitation and can only be issued qualified."))
     if tax is None:
         rows.append(("Tax health check",
@@ -992,7 +1151,7 @@ def signoff(ds, qualified: bool, limitations, recon, tax=None) -> None:
         rows.append((
             "Tax health check",
             f"VAT and withholding were re-performed on {tax['rows']:,} line(s) at the schedule the preparer "
-            f"configured, producing {_money(tax['exposure']['total'])} of exposure"
+            f"configured, producing {money(tax['exposure']['total'])} of exposure"
             + (" — which the report carries as a written limitation because it clears the 1% materiality floor on the "
                "value tested. A statutory liability that has not been remitted or provided for is disclosed, not "
                "buried in an exception tab."

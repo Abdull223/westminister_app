@@ -101,7 +101,9 @@ def require_dataset() -> Dataset:
     ds = get_dataset()
     if ds is None:
         st.title("Westminister Intelligence Suite")
-        st.markdown("Upload an Excel/CSV ledger in the sidebar, or click **Load sample Kenya ledger**, to activate the AI dashboards and cash-flow analytics.")
+        st.markdown("Upload an Excel/CSV ledger in the sidebar, or start from **Load sample Kenya ledger** "
+                    "(cash-flow and bank reconciliation) or **Load sample VAT & WHT ledger** (statutory tax "
+                    "testing) to open the dashboards, the decision brief and the certified report.")
         c1, c2, c3 = st.columns(3)
         c1.markdown("**Background AI cleaning**")
         c1.caption("Missing fields, duplicates and outliers resolved automatically with a full audit trail.")

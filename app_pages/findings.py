@@ -3,6 +3,7 @@ import io
 import pandas as pd
 import streamlit as st
 
+from core import brief
 from core import explain
 from core.state import require_dataset
 
@@ -18,6 +19,17 @@ with st.container(horizontal=True):
         st.metric(name, f"{score:.1f}%", border=True)
 
 explain.quality(ds)
+
+st.subheader("Decision brief")
+st.caption("The one page a managing partner reads first: what has to be decided, what each decision is worth, who owns it and when it falls due.")
+brief.render(brief.build(
+    ds,
+    st.session_state.get("dash_report"),
+    st.session_state.get("recon_report"),
+    st.session_state.get("tax_report"),
+    open_items=brief.open_exceptions(ds),
+))
+explain.brief_band()
 
 st.subheader("Executive summary")
 with st.container(border=True):

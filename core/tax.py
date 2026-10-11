@@ -341,7 +341,7 @@ def control_account(df: pd.DataFrame, cols: dict, sched: pd.DataFrame) -> dict:
     for c in df.columns:
         if not _TYPE_HINT.search(str(c).lower()):
             continue
-        guess = _text(df, c).str.contains(_EXPENSE_HINT, case=False, na=False)
+        guess = _text(df, c).str.contains(_EXPENSE_HINT, na=False)
         if guess.any() and guess.sum() < len(df):
             direction = np.where(guess, "Input", "Output")
             basis = f"column “{c}”"
@@ -351,8 +351,8 @@ def control_account(df: pd.DataFrame, cols: dict, sched: pd.DataFrame) -> dict:
         if base_money.lt(0).any() and base_money.gt(0).any():
             direction = np.where(base_money < 0, "Input", "Output")
             basis = "the sign of the amount"
-        elif cols["payees"] and _text(df, cols["payees"]).str.contains(_EXPENSE_HINT, case=False, na=False).any():
-            mask = _text(df, cols["payees"]).str.contains(_EXPENSE_HINT, case=False, na=False)
+        elif cols["payees"] and _text(df, cols["payees"]).str.contains(_EXPENSE_HINT, na=False).any():
+            mask = _text(df, cols["payees"]).str.contains(_EXPENSE_HINT, na=False)
             direction = np.where(mask, "Input", "Output")
             basis = f"a narration match on “{cols['payees']}”"
         else:
@@ -408,7 +408,7 @@ def wht_checks(df: pd.DataFrame, cols: dict, sched: pd.DataFrame) -> dict:
         narr = narr + " " + _text(df, c)
     heads = narr.map(classify_head)
     # An expense line is one the file itself says is a purchase, or one booked as a negative amount.
-    expense = narr.str.contains(_EXPENSE_HINT, case=False, na=False)
+    expense = narr.str.contains(_EXPENSE_HINT, na=False)
     if cols["gross"]:
         expense = expense | (_num(df[cols["gross"]]) < 0)
 

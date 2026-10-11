@@ -6,6 +6,13 @@ secondaryBackgroundColor = "#0C2238"
 textColor = "#E8EDF2"
 font = "sans serif"
 
+# Streamlit paints its own loading shell in the browser an instant before any message from Python
+# can arrive, and nothing in the app can style that moment. Matching the sidebar panel to the page
+# ink at least removes its silhouette, so what flashes up reads as an empty stage rather than as
+# the app; theme.py's own gradient takes over as soon as the intro lands.
+[theme.sidebar]
+backgroundColor = "#061625"
+
 [runner]
 magicEnabled = false
 

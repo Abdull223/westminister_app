@@ -70,15 +70,17 @@ with st.expander("Check settings — column mapping and rate schedule", expanded
     plain = [None, *col_names]
     c1, c2, c3 = st.columns(3)
     with c1:
-        date_col = _pick("Transaction date", col_names, det["date"], key="tc_date",
+        date_col = _pick("Transaction date", plain, det["date"], key="tc_date",
                          help="Each line is tested at the rate in force on this date.")
         vat_col = _pick("Declared VAT amount", plain, det["vat"], key="tc_vat",
                         help="Leave blank if the file carries no VAT column: the page then reports a derived figure and labels it derived.")
     with c2:
-        net_col = _pick("Net of tax", col_names, det["net"], key="tc_net")
+        net_col = _pick("Net of tax", plain, det["net"], key="tc_net",
+                        help="Reads None when the file has no column this engine trusts. Never guess an amount column: "
+                             "mapping a document number here would recompute tax on it.")
         wht_col = _pick("Withholding deducted", plain, det["wht"], key="tc_wht")
     with c3:
-        gross_col = _pick("Gross / total", col_names, det["gross"], key="tc_gross")
+        gross_col = _pick("Gross / total", plain, det["gross"], key="tc_gross")
         code_col = _pick("Tax code / supply type", plain, det["code"], key="tc_code",
                          help="Identifies zero-rated and exempt supplies so they are tested at 0% rather than the standard rate.")
     c4, c5, c6, c7 = st.columns(4)
@@ -127,6 +129,20 @@ with st.expander("Check settings — column mapping and rate schedule", expanded
         st.error("The rate schedule has no usable rows, so nothing can be recomputed. Restore the default above.")
         st.stop()
 
+if not vat_col:
+    with st.container(horizontal=True, vertical_alignment="center"):
+        st.caption(
+            f"No declared VAT column in “{ds.source}”, so the VAT figures below are derived estimates, not re-performed "
+            "ones. Load the demonstration purchase ledger to see the declared-basis tests, PIN and e-TIMS checks work."
+        )
+        if st.button("Load VAT & WHT ledger", icon=":material/receipt_long:"):
+            st.session_state.raw_bytes = make_sample_tax_csv()
+            st.session_state.source_name = "sample_tax_ledger.csv"
+            st.session_state.pop("sheet", None)
+            for key in ("tc_date", "tc_net", "tc_gross", "tc_vat", "tc_wht", "tc_code", "tc_pin", "tc_doc", "tc_payee", "tc_sched"):
+                st.session_state.pop(key, None)
+            st.rerun()
+
 res = tax.run(
     frame,
     {
@@ -136,6 +152,7 @@ res = tax.run(
     },
 )
 used = res["cols"]
+amount_col = used["gross"] or used["net"]
 vat, wht, pins, seq, control, exp = res["vat"], res["wht"], res["pins"], res["seq"], res["control"], res["exposure"]
 
 # Snapshot for the certified report: plain values only, so the PDF rebuilds without the engine and the
@@ -145,7 +162,7 @@ st.session_state.tax_report = {
     "ledger_hash": ds.hash,
     "rows": res["rows"],
     "span": res["span"],
-    "value_tested": float(pd.to_numeric(frame[used["gross"] or used["net"]], errors="coerce").sum(skipna=True)),
+    "value_tested": float(pd.to_numeric(frame[amount_col], errors="coerce").sum(skipna=True)) if amount_col else 0.0,
     "columns": {k: v for k, v in used.items() if k != "payee_candidates" and v},
     "rate_span": (res["rate_first"], res["rate_last"]),
     "unparsed_dates": int(res["unparsed_dates"]),
@@ -218,10 +235,10 @@ else:
 with st.container(horizontal=True):
     st.metric("Lines tested", f"{res['rows']:,}", delta=(f"{res['span'][0]} → {res['span'][1]}" if res["span"] else "no dates read"), delta_color="off", border=True)
     st.metric("VAT exceptions", f"{vat['exceptions']:,}" if vat["basis"] == "declared" else vat["basis"], delta=vat_delta, delta_color="inverse" if vat.get("under_declared") else "off", border=True)
-    st.metric("Withholding shortfall", f"KES {wht['unwithheld']:,.0f}", delta=f"{len(wht['table']):,} of {wht['wht_heads']:,} service line(s)", delta_color="inverse" if wht["unwithheld"] else "off", border=True)
+    st.metric("Withholding shortfall", explain.money(wht["unwithheld"]), delta=f"{len(wht['table']):,} of {wht['wht_heads']:,} service line(s)", delta_color="inverse" if wht["unwithheld"] else "off", border=True, help=f"Exact: KES {wht['unwithheld']:,.2f}")
     st.metric("PIN exceptions", f"{len(pins['table']) + pins['shared']:,}", delta=f"{pins['coverage']}% of lines carry a PIN", delta_color="inverse" if len(pins["table"]) or pins["shared"] else "off", border=True)
     st.metric("Sequence breaks", f"{seq['gaps'] + seq['repeats'] + seq['inversions']:,}", delta=f"{seq['groups']} series read", delta_color="inverse" if seq["gaps"] or seq["repeats"] else "off", border=True)
-    st.metric("Estimated exposure", f"KES {exp['total']:,.0f}", delta=f"tax + penalty + {exp['months']:g} mo interest", delta_color="inverse" if exp["total"] else "off", border=True)
+    st.metric("Estimated exposure", explain.money(exp["total"]), delta=f"tax + penalty + {exp['months']:g} mo interest", delta_color="inverse" if exp["total"] else "off", border=True, help=f"Exact: KES {exp['total']:,.2f}")
 
 if res["span"] and res["rate_first"] is not None and res["rate_last"] is not None and res["rate_first"] != res["rate_last"]:
     st.warning(

@@ -186,9 +186,9 @@ st.session_state.recon_report = {
 with st.container(horizontal=True):
     st.metric("Bank lines tied", f"{s['matched_bank']:,} of {s['bank_lines']:,}", delta=f"{s['match_rate']:.1f}% tie-up", delta_color="off", border=True)
     st.metric("Ledger lines proved", f"{s['matched_ledger']:,} of {s['ledger_lines']:,}", delta=f"{s['ledger_only_lines']:,} unreceived", delta_color="off", border=True)
-    st.metric("In bank, not in ledger", f"KES {s['bank_only_total']:,.0f}", delta=f"{s['bank_only_lines']:,} item(s)", delta_color="inverse", border=True)
-    st.metric("In ledger, not in bank", f"KES {s['ledger_only_total']:,.0f}", delta=f"{s['ledger_only_lines']:,} item(s)", delta_color="inverse", border=True)
-    st.metric("Duplicate payments", f"KES {s['duplicate_total']:,.0f}", delta=f"{s['duplicate_lines']:,} item(s)", delta_color="inverse", border=True)
+    st.metric("In bank, not in ledger", explain.money(s["bank_only_total"]), delta=f"{s['bank_only_lines']:,} item(s)", delta_color="inverse", border=True, help=f"Exact: KES {s['bank_only_total']:,.2f}")
+    st.metric("In ledger, not in bank", explain.money(s["ledger_only_total"]), delta=f"{s['ledger_only_lines']:,} item(s)", delta_color="inverse", border=True, help=f"Exact: KES {s['ledger_only_total']:,.2f}")
+    st.metric("Duplicate payments", explain.money(s["duplicate_total"]), delta=f"{s['duplicate_lines']:,} item(s)", delta_color="inverse", border=True, help=f"Exact: KES {s['duplicate_total']:,.2f}")
 
 if s["foots"]:
     st.success(

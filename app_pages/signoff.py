@@ -3,6 +3,7 @@ import html
 
 import streamlit as st
 
+from core import brief
 from core import charts
 from core import explain
 from core import intelligence as intel
@@ -41,6 +42,10 @@ if tax:
         )
 qualified = ds.qualified or bool(recon_limits) or bool(tax_limits)
 limitations = tuple(ds.limitations) + recon_limits + tax_limits
+
+# The brief the report opens with, built from the same snapshots the screens published.
+report_brief = brief.build(ds, st.session_state.get("dash_report"), recon, tax,
+                           open_items=brief.open_exceptions(ds))
 
 st.title("Partner sign-off & certified PDF")
 st.caption("Draw the partner signature, then generate the immutable executive audit report.")
@@ -144,6 +149,7 @@ with col_left:
             changes_truncated=bool(ds.stats["changes_truncated"]),
             recon=recon,
             tax=tax,
+            brief=report_brief,
         )
 
     pdf = st.session_state.get("cert_pdf")
@@ -197,6 +203,7 @@ with col_right:
             <p><b>Timestamp:</b> {timestamp}</p>
             <p><b>Records processed:</b> {len(ds.clean_df):,}</p>
             <p><b>Cell-level changes:</b> {ds.stats['cell_changes']:,}</p>
+            <p><b>Decision brief:</b> {report_brief["panel_line"]}</p>
             <p><b>Data quality:</b> {ds.quality['overall']:.1f}% · {checks_ok}/{len(ds.checks)} integrity checks passed</p>
             <p><b>Cryptographic hash:</b></p>
             <div class="wc-hash">{html.escape(ds.hash)}</div>

@@ -107,7 +107,20 @@ def test_signoff_embeds_reconciliation(recon: dict) -> None:
     pdf = _cert(at)
     assert pdf and pdf[:5] == b"%PDF-", "no PDF produced"
     assert len(pdf) > 20_000, f"PDF suspiciously small: {len(pdf)} bytes"
+    _assert_download(at, pdf)
     print(f"  sign-off    ok · {len(pdf):,} byte certified report with the reconciliation section")
+
+
+def _assert_download(at: AppTest, pdf: bytes) -> None:
+    """The last step of the journey: the widget that hands the partner the file."""
+    btn = at.download_button
+    assert len(btn) == 1, f"expected one download button, found {len(btn)}"
+    proto = btn[0].proto
+    assert not proto.disabled, "the download is disabled"
+    # Streamlit serves the bytes from its media store; the widget only carries that URL.
+    assert proto.url.lower().endswith(".pdf"), f"download is not a PDF: {proto.url}"
+    assert proto.label == "Download certified audit PDF"
+    print(f"  download    ok · {proto.url} ready for the browser ({len(pdf):,} bytes behind it)")
 
 
 def test_unfooted_bridge_qualifies_the_report(recon: dict) -> None:
@@ -188,6 +201,49 @@ def test_signoff_embeds_tax_and_gates(report: dict) -> None:
           f"nil exposure adds no limitation")
 
 
+def _pdf_text(pdf: bytes) -> str:
+    """Extracted PDF text, whitespace normalised so table wrapping cannot hide a phrase."""
+    import io
+
+    from pypdf import PdfReader
+    raw = "\n".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(pdf)).pages)
+    return " ".join(raw.split())
+
+
+def test_decision_brief(recon: dict, tax: dict) -> None:
+    """The brief must read from the snapshots the pages published, and print in the report."""
+    dash_at = _seeded("dashboard")
+    dash_at.run()
+    if dash_at.exception:
+        _fail("dashboard", dash_at, "page raised before publishing the snapshot")
+    dash = dict(dash_at.session_state["dash_report"])
+    assert dash["months"] >= 3 and dash["series"], "the dashboard published no cash-flow reading"
+    assert dash["peak"][1] >= dash["trough"][1], "peak/trough inverted"
+
+    at = _seeded("findings", recon=recon, tax=tax)
+    at.session_state["dash_report"] = dash
+    at.run()
+    if at.exception:
+        _fail("findings", at, "decision brief raised")
+    verdict = " ".join(s.value for s in at.success) + " ".join(e.value for e in at.error)
+    assert "decision" in verdict.lower(), f"no verdict rendered: {verdict[:200]}"
+    assert any("Decision" in list(d.value.columns) for d in at.dataframe), "decisions table missing"
+
+    signoff = _seeded("signoff", recon=recon, tax=tax)
+    signoff.session_state["dash_report"] = dash
+    signoff.run()
+    if signoff.exception:
+        _fail("sign-off brief", signoff, "page raised")
+    next(b for b in signoff.button if b.label.startswith("Generate certified PDF")).click().run()
+    if signoff.exception:
+        _fail("sign-off brief", signoff, "PDF generation raised")
+    text = _pdf_text(_cert(signoff))
+    assert "Decision brief" in text, "the report does not open with the decision brief"
+    assert "Decisions required" in text and "Watch list" in text, "brief sections missing from the PDF"
+    assert "Recover duplicate payments" in text, "the planted duplicate never reached the action schedule"
+    print("  brief       ok · verdict, decisions and watch list rendered on screen and in the PDF")
+
+
 def test_empty_states() -> None:
     shell = AppTest.from_file(str(ROOT / "streamlit_app.py"), default_timeout=TIMEOUT)
     shell.run()
@@ -239,6 +295,8 @@ if __name__ == "__main__":
     test_signoff_embeds_tax_and_gates(tax_payload)
     print("→ bridge gate")
     test_unfooted_bridge_qualifies_the_report(payload)
+    print("→ decision brief")
+    test_decision_brief(payload, tax_payload)
     print("→ empty states")
     test_empty_states()
     print("\nAll page checks passed.")

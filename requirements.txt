@@ -5,3 +5,4 @@ altair>=5.0
 reportlab>=4.0
 openpyxl>=3.1
 vl-convert-python>=1.7
+pypdf>=6.0  # tests only: extracts the certified PDF to assert the brief reached the report

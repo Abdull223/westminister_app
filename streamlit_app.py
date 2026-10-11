@@ -8,7 +8,6 @@ import pathlib
 import streamlit as st
 
 from core import theme
-from core.data import make_sample_csv, make_sample_statement_csv, make_sample_tax_csv, sheet_names
 
 st.set_page_config(
     page_title="Westminister Intelligence Suite — Kenya",
@@ -16,21 +15,31 @@ st.set_page_config(
     layout="wide",
 )
 
-_ASSET = pathlib.Path(__file__).parent / "assets" / "logo.png"
-LOGO_BYTES = _ASSET.read_bytes() if _ASSET.exists() else None
+_ASSETS = pathlib.Path(__file__).parent / "assets"
+LOGO_BYTES = (_ASSETS / "logo.png").read_bytes() if (_ASSETS / "logo.png").exists() else None
+# The mark is 3841x2161 for print; embedded as a data URL that is a 130 KB first message, and the
+# frame that beats it to the screen is the one the intro exists to replace. Regenerate the 320 px
+# screen copy with PIL's LANCZOS whenever the print mark changes.
+LOGO_SCREEN = (_ASSETS / "logo-screen.png").read_bytes() if (_ASSETS / "logo-screen.png").exists() else LOGO_BYTES
 st.session_state.setdefault("logo_bytes", LOGO_BYTES)
 
+# The intro is the first delta on the wire and pandas stays unimported until a page needs it,
+# so the logo paints before any of the app frame exists.
+theme.show_splash(LOGO_SCREEN)
 theme.inject_theme()
-theme.show_splash(LOGO_BYTES)
 
 
 def _load_sample():
+    from core.data import make_sample_csv
+
     st.session_state.raw_bytes = make_sample_csv()
     st.session_state.source_name = "sample_kenya_ledger.csv"
     st.session_state.pop("sheet", None)
 
 
 def _load_tax_sample():
+    from core.data import make_sample_tax_csv
+
     st.session_state.raw_bytes = make_sample_tax_csv()
     st.session_state.source_name = "sample_tax_ledger.csv"
     st.session_state.pop("sheet", None)
@@ -50,6 +59,8 @@ def _clear_dataset():
 
 
 def _load_sample_statement():
+    from core.data import make_sample_statement_csv
+
     st.session_state.stmt_bytes = make_sample_statement_csv()
     st.session_state.stmt_name = "sample_bank_statement.csv"
     st.session_state.pop("stmt_sheet", None)
@@ -68,6 +79,17 @@ def _clear_statement():
         st.session_state.pop(key, None)
 
 
+def _sheets(raw: bytes, name: str) -> list[str]:
+    """Worksheets of an uploaded workbook.
+
+    core.data pulls in pandas, so it is imported here rather than at module level: the intro
+    delta must reach the browser before the data layer starts loading.
+    """
+    from core.data import sheet_names
+
+    return sheet_names(raw, name)
+
+
 with st.sidebar:
     st.markdown("### Data ingestion")
     st.file_uploader("Excel / CSV ledger", type=["csv", "xlsx"], key="ledger_file", on_change=_on_upload)
@@ -76,7 +98,7 @@ with st.sidebar:
               help="A purchase/sales ledger carrying VAT, withholding, tax codes and supplier PINs — the tax health check page reads every statutory test from it.")
     raw = st.session_state.get("raw_bytes")
     if raw is not None:
-        sheets = sheet_names(raw, st.session_state["source_name"])
+        sheets = _sheets(raw, st.session_state["source_name"])
         if len(sheets) > 1:
             if st.session_state.get("sheet") not in sheets:
                 st.session_state.sheet = sheets[0]
@@ -93,7 +115,7 @@ with st.sidebar:
     st.button("Load sample bank statement", icon=":material/account_balance:", width="stretch", on_click=_load_sample_statement)
     stmt = st.session_state.get("stmt_bytes")
     if stmt is not None:
-        stmt_sheets = sheet_names(stmt, st.session_state["stmt_name"])
+        stmt_sheets = _sheets(stmt, st.session_state["stmt_name"])
         if len(stmt_sheets) > 1:
             if st.session_state.get("stmt_sheet") not in stmt_sheets:
                 st.session_state.stmt_sheet = stmt_sheets[0]
@@ -138,5 +160,5 @@ page = st.navigation(
     position="top",
 )
 
-theme.app_header(LOGO_BYTES, user="Westminister Senior Partner")
+theme.app_header(LOGO_SCREEN, user="Westminister Senior Partner")
 page.run()
