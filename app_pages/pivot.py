@@ -5,12 +5,14 @@ import pandas as pd
 import streamlit as st
 
 from core import charts
+from core import explain
 from core.state import require_dataset
 
 ds = require_dataset()
 
 st.title("Pivot & explore")
 st.caption("Slice the ledger Excel-style: pivot tables, an editable working grid and a per-column profiler.")
+explain.page("pivot")
 
 df = ds.clean_df
 numeric_cols = list(df.select_dtypes(include=[np.number]).columns)
@@ -39,6 +41,7 @@ with tab_pivot:
     for fcol, chosen in filters.items():
         view = view[view[fcol].astype(str).isin(chosen)]
 
+    pv = None
     if rows and vals:
         agg = AGGS[agg_label]
         try:
@@ -80,6 +83,7 @@ with tab_pivot:
                 st.altair_chart(charts.heatmap(flat, "col", "row", "value", f"{agg_label} of {vals[0]}"))
     else:
         st.info("Pick at least one Row and one Value to build a pivot.")
+    explain.pivot(view, pv, rows, vals, agg_label)
 
 with tab_edit:
     st.caption("Edits live in this browser session only — download to keep them, they do not alter the source file.")
@@ -107,6 +111,14 @@ with tab_edit:
             icon=":material/download:",
             width="content",
         )
+    explain.band([
+        ("What this grid is",
+         "A working copy of the cleaned ledger. Type into it to test a correction and watch the pivot react — nothing "
+         "here touches the uploaded file, its SHA-256 fingerprint, or any other page."),
+        ("Getting it into the report",
+         "Download the CSV and re-upload it if the correction should become the audited record. That is deliberate: a "
+         "report should only ever be built from a file somebody chose to submit, not from keystrokes in a browser tab."),
+    ], "How to use this grid")
 
 with tab_profile:
     col = st.selectbox("Column", df.columns.tolist(), index=0 if not ds.schema["metric"] else df.columns.tolist().index(ds.schema["metric"]))
@@ -127,3 +139,4 @@ with tab_profile:
             top = s.value_counts().head(12).rename_axis(col).reset_index(name="Records")
             st.altair_chart(charts.donut(top, "Records", col, f"Share by {col}"))
             st.dataframe(top, hide_index=True, width="content")
+    explain.profiler(col, s, is_num)
