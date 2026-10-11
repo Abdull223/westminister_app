@@ -12,6 +12,10 @@ import pandas as pd
 import streamlit as st
 
 ISSUE_COLS = ["Check / action", "Severity", "Target field", "Records affected", "Resolution method"]
+CHANGE_COLS = ["Row", "Field", "Before", "After", "Action", "Severity"]
+
+# A reviewer samples this register; cap it so a huge ledger stays renderable.
+MAX_CHANGES = 20000
 
 NUM_LIKE = re.compile(r"^\s*(KES|Ksh|Sh|USD|\$)?\s*-?[\d,]+(\.\d+)?\s*$")
 DELIERS = [", ", "; ", " - ", " | ", ",", ";", "|"]
@@ -21,7 +25,39 @@ def _issue(action, severity, field, count, method):
     return (action, severity, field, int(count), method)
 
 
-def _split_merged(d: pd.DataFrame, issues: list) -> list[tuple[str, int]]:
+def _norm(s: pd.Series) -> pd.Series:
+    return s.astype("string").fillna("(blank)")
+
+
+def _diff(changes: list, before: pd.DataFrame, after: pd.DataFrame, action: str, severity: str) -> None:
+    """Record every cell this step actually altered, keyed to the spreadsheet row."""
+    idx = after.index
+    src = before.loc[idx]
+    for col in after.columns:
+        if col not in src.columns or len(changes) >= MAX_CHANGES:
+            continue
+        old, new = _norm(src[col]), _norm(after[col])
+        changed = old != new
+        if not changed.any():
+            continue
+        # Reformatting the same number (450 -> 450.0) is not an adjustment.
+        onum, nnum = pd.to_numeric(old, errors="coerce"), pd.to_numeric(new, errors="coerce")
+        same = onum.notna() & nnum.notna() & np.isclose(onum.fillna(-1.0), nnum.fillna(-1.0), rtol=1e-12, atol=1e-9)
+        for pos in np.flatnonzero((changed & ~same).to_numpy()):
+            if len(changes) >= MAX_CHANGES:
+                break
+            changes.append((int(idx[pos]) + 2, str(col), old.iloc[pos], new.iloc[pos], action, severity))
+
+
+def _row_events(changes: list, removed: pd.DataFrame, action: str, severity: str) -> None:
+    for i, row in removed.iterrows():
+        if len(changes) >= MAX_CHANGES:
+            return
+        preview = "; ".join(f"{c}={v}" for c, v in row.items() if pd.notna(v) and str(v).strip())
+        changes.append((int(i) + 2, "(entire row)", preview[:160], "(removed)", action, severity))
+
+
+def _split_merged(d: pd.DataFrame, issues: list, changes: list) -> list[tuple[str, int]]:
     """Split text columns where most values pack 2-3 fields behind a common delimiter."""
     split_info = []
     for col in list(d.select_dtypes(include=["object", "string"]).columns):
@@ -47,6 +83,12 @@ def _split_merged(d: pd.DataFrame, issues: list) -> list[tuple[str, int]]:
             new_cols = {}
             for i in range(n_parts):
                 new_cols[f"{col} · part {i + 1}"] = d[col].astype("string").str.split(delim, n=n_parts - 1, regex=False).str[i].astype("string").str.strip()
+            k = min(len(d), MAX_CHANGES - len(changes))
+            if k > 0:
+                extracted = pd.concat([s.iloc[:k] for s in new_cols.values()], axis=1).fillna("(blank)").astype("string")
+                packed = d[col].iloc[:k].astype("string").fillna("(blank)")
+                for pos in range(k):
+                    changes.append((int(d.index[pos]) + 2, col, packed.iloc[pos], " ⟶ ".join(extracted.iloc[pos]), "Merged cell split", "Medium"))
             d.drop(columns=[col], inplace=True)
             for name, series in new_cols.items():
                 d[name] = series
@@ -108,10 +150,16 @@ def smart_clean(
     trim_spaces: bool = True,
     cap_outliers: bool = False,
     split_merged: bool = True,
-) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """Clean the ledger and return (clean_df, issue_log, stats)."""
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
+    """Clean the ledger and return (clean_df, issue_log, change_log, stats).
+
+    `change_log` records every individual adjustment — one row per edited cell
+    or removed record — so a reviewer can re-perform the work instead of taking
+    the aggregate counts on trust. Row numbers are spreadsheet rows (header = 1).
+    """
     d = raw_df.copy()
     issues: list[tuple] = []
+    changes: list[tuple] = []
     stats = {
         "rows_raw": len(d),
         "rows_clean": len(d),
@@ -130,15 +178,16 @@ def smart_clean(
     empty_mask = d.isna().all(axis=1) | (d.astype(str).apply(lambda c: c.str.strip()).eq("").all(axis=1))
     if empty_mask.any():
         stats["empty_rows_dropped"] = int(empty_mask.sum())
+        _row_events(changes, d[empty_mask], "Empty row removed", "Medium")
         d = d[~empty_mask]
-        issues.append(_issue("Empty rows dropped", "Medium", "Full row", stats["empty_rows_dropped"], "Rows with no data at any position removed"))
 
     # 1. Split merged columns (names/addresses packed together)
     if split_merged:
-        stats["split_columns"] = _split_merged(d, issues)
+        stats["split_columns"] = _split_merged(d, issues, changes)
 
     # 2. Trim & collapse whitespace
     if trim_spaces:
+        pre = d.copy()
         text_cols = list(d.select_dtypes(include=["object", "string"]).columns)
         for col in text_cols:
             d[col] = (
@@ -150,23 +199,28 @@ def smart_clean(
             )
         if text_cols:
             issues.append(_issue("Whitespace normalisation", "Low", ", ".join(text_cols[:3]), len(d), "Trimmed and collapsed whitespace in text fields"))
+        _diff(changes, pre, d, "Whitespace trimmed", "Low")
 
     # 3. Coerce malformed numerics (currency strings, "N/A" in number columns)
+    pre = d.copy()
     stats["malformed_cells"] = _coerce_numerics(d, issues)
+    _diff(changes, pre, d, "Numeric format normalised", "High")
 
     # 4. Repeated columns
     stats["redundant_columns"] = _drop_redundant_columns(d, issues)
 
     # 5. Duplicate purge
     if drop_dupes:
-        before = len(d)
+        pre = d
         d = d.drop_duplicates()
-        stats["dupes_removed"] = before - len(d)
+        stats["dupes_removed"] = len(pre) - len(d)
         if stats["dupes_removed"]:
+            _row_events(changes, pre.loc[pre.index.difference(d.index)], "Duplicate row purged", "Medium")
             issues.append(_issue("Duplicate purge", "Medium", "Full row", stats["dupes_removed"], "Removed exact duplicate transactions"))
 
     # 6. Missing value imputation (covers original gaps + blanked malformed cells)
     if impute:
+        pre = d.copy()
         for col in d.columns:
             missing = int(d[col].isna().sum())
             if not missing:
@@ -182,9 +236,11 @@ def smart_clean(
                 method = "Default label"
             stats["imputed_cells"] += missing
             issues.append(_issue("Missing field auto-fill", "Low", col, missing, method))
+        _diff(changes, pre, d, "Missing value imputed", "Low")
 
     # 7. Outlier capping
     if cap_outliers:
+        pre = d.copy()
         for col in d.select_dtypes(include=[np.number]).columns:
             q1, q3 = d[col].quantile(0.25), d[col].quantile(0.75)
             iqr = q3 - q1
@@ -198,7 +254,10 @@ def smart_clean(
                 d[col] = d[col].clip(lower=lo, upper=hi)
                 stats["outliers_capped"] += int(flagged.sum())
                 issues.append(_issue("Outlier capping", "Medium", col, flagged.sum(), f"Clipped values outside [{lo:,.0f}, {hi:,.0f}] (IQR method)"))
+        _diff(changes, pre, d, "Outlier capped", "Medium")
 
     stats["rows_clean"] = len(d)
+    stats["cell_changes"] = len(changes)
+    stats["changes_truncated"] = len(changes) >= MAX_CHANGES
     log_df = pd.DataFrame(issues, columns=ISSUE_COLS)
-    return d.reset_index(drop=True), log_df, stats
+    return d.reset_index(drop=True), log_df, pd.DataFrame(changes, columns=CHANGE_COLS), stats

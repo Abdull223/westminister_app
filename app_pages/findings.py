@@ -19,7 +19,7 @@ st.subheader("Executive summary")
 with st.container(border=True):
     report_md = (
         f"# Westminister Intelligence Audit — Executive Report\n\n"
-        f"**Dataset:** {ds.name}  \n**SHA-256 fingerprint:** `{ds.hash}`  \n"
+        f"**Dataset:** {ds.source}  \n**SHA-256 fingerprint:** `{ds.hash}`  \n"
         f"**Records audited:** {len(ds.clean_df):,}\n\n---\n\n"
         + ds.summary
         + "\n\n## Recommendations\n\n"
@@ -61,6 +61,27 @@ with st.expander("AI cleaning & adjustment log", expanded=True):
     else:
         st.dataframe(ds.issue_log, hide_index=True)
         st.caption(f"{len(ds.issue_log)} adjustment action(s) applied across {ds.stats['rows_raw']:,} raw records.")
+
+    st.divider()
+    st.markdown("**Cell-level change register**")
+    st.caption("Every individual adjustment the engine made, in spreadsheet row order (row 1 is the header). Sample these against the raw file to re-perform the cleaning.")
+    changes = ds.change_log
+    if changes.empty:
+        st.success("The ledger was accepted without a single cell-level change.")
+    else:
+        options = ["All actions", *sorted(changes["Action"].unique())]
+        pick = st.selectbox("Filter by action", options, key="change_action")
+        view = changes if pick == options[0] else changes[changes["Action"] == pick]
+        st.dataframe(view, hide_index=True, height=300)
+        truncated = f" — register stops at the first {ds.stats['cell_changes']:,} changes" if ds.stats["changes_truncated"] else ""
+        st.caption(f"{len(view):,} of {len(changes):,} recorded change(s) shown{truncated}.")
+        st.download_button(
+            "Download change register (CSV)",
+            data=changes.to_csv(index=False).encode(),
+            file_name="Westminister_Change_Register.csv",
+            mime="text/csv",
+            icon=":material/download:",
+        )
 
 with st.expander("Raw vs cleaned comparison"):
     c1, c2 = st.columns(2)

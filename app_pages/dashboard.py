@@ -9,7 +9,7 @@ from core.state import require_dataset
 ds = require_dataset()
 
 st.title("Cash-flow dashboard")
-st.caption(f"{ds.name} · SHA-256 fingerprint `{ds.hash}`")
+st.caption(f"{ds.source} · SHA-256 fingerprint `{ds.hash}`")
 
 metric = ds.schema["metric"]
 date_col = ds.schema["dates"][0] if ds.schema["dates"] else None

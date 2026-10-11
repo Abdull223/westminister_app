@@ -9,15 +9,25 @@ import streamlit as st
 
 
 def fingerprint(raw_bytes: bytes) -> str:
-    return "SHA256:" + hashlib.sha256(raw_bytes).hexdigest()[:16].upper()
+    """Full SHA-256 digest — this string is quoted as evidence on the certificate."""
+    return "SHA256:" + hashlib.sha256(raw_bytes).hexdigest().upper()
+
+
+@st.cache_data(show_spinner=False)
+def sheet_names(raw_bytes: bytes, filename: str) -> list[str]:
+    """Worksheets in an Excel workbook; empty list for CSV."""
+    if filename.lower().endswith(".csv"):
+        return []
+    with pd.ExcelFile(io.BytesIO(raw_bytes)) as xl:
+        return [str(s) for s in xl.sheet_names]
 
 
 @st.cache_data(ttl="1h", max_entries=8, show_spinner="Reading ledger…")
-def load_dataset(raw_bytes: bytes, filename: str) -> pd.DataFrame:
+def load_dataset(raw_bytes: bytes, filename: str, sheet: str | None = None) -> pd.DataFrame:
     buf = io.BytesIO(raw_bytes)
     if filename.lower().endswith(".csv"):
         return pd.read_csv(buf)
-    return pd.read_excel(buf)
+    return pd.read_excel(buf, sheet_name=sheet if sheet is not None else 0)
 
 
 @st.cache_data(show_spinner=False)

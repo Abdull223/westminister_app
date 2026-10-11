@@ -8,7 +8,7 @@ import pathlib
 import streamlit as st
 
 from core import theme
-from core.data import make_sample_csv
+from core.data import make_sample_csv, sheet_names
 
 st.set_page_config(
     page_title="Westminister Intelligence Suite — Kenya",
@@ -27,6 +27,7 @@ theme.show_splash(LOGO_BYTES)
 def _load_sample():
     st.session_state.raw_bytes = make_sample_csv()
     st.session_state.source_name = "sample_kenya_ledger.csv"
+    st.session_state.pop("sheet", None)
 
 
 def _on_upload():
@@ -34,20 +35,29 @@ def _on_upload():
     if uploaded is not None:
         st.session_state.raw_bytes = uploaded.getvalue()
         st.session_state.source_name = uploaded.name
+        st.session_state.pop("sheet", None)
 
 
 def _clear_dataset():
-    st.session_state.pop("raw_bytes", None)
-    st.session_state.pop("source_name", None)
-    st.session_state.pop("cert_pdf", None)
+    for key in ("raw_bytes", "source_name", "cert_pdf", "sheet"):
+        st.session_state.pop(key, None)
 
 
 with st.sidebar:
     st.markdown("### Data ingestion")
     st.file_uploader("Excel / CSV ledger", type=["csv", "xlsx"], key="ledger_file", on_change=_on_upload)
     st.button("Load sample Kenya ledger", icon=":material/bolt:", width="stretch", on_click=_load_sample)
-    if st.session_state.get("raw_bytes") is not None:
-        st.caption(f"Active: {st.session_state['source_name']}")
+    raw = st.session_state.get("raw_bytes")
+    if raw is not None:
+        sheets = sheet_names(raw, st.session_state["source_name"])
+        if len(sheets) > 1:
+            if st.session_state.get("sheet") not in sheets:
+                st.session_state.sheet = sheets[0]
+            st.selectbox("Worksheet to audit", sheets, key="sheet")
+            skipped = [s for s in sheets if s != st.session_state.sheet]
+            st.warning(f"{len(skipped)} of {len(sheets)} worksheets are outside this audit: {', '.join(skipped[:5])}", icon=":material/folder_off:")
+        active = st.session_state["source_name"] + (f" · {st.session_state['sheet']}" if st.session_state.get("sheet") else "")
+        st.caption(f"Active: {active}")
         st.button("Clear dataset", icon=":material/delete:", width="stretch", on_click=_clear_dataset)
 
     st.divider()

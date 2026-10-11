@@ -14,6 +14,9 @@ from core.data import fingerprint, load_dataset
 
 DEFAULT_OPTS = {"impute": True, "drop_dupes": True, "trim_spaces": True, "cap_outliers": False, "split_merged": True}
 
+# Below either threshold the certificate may only be issued in qualified form.
+QUALITY_FLOOR = 90.0
+
 
 @dataclass
 class Dataset:
@@ -22,6 +25,7 @@ class Dataset:
     raw_df: pd.DataFrame
     clean_df: pd.DataFrame
     issue_log: pd.DataFrame
+    change_log: pd.DataFrame
     stats: dict
     schema: dict
     quality: dict
@@ -29,17 +33,38 @@ class Dataset:
     insights: list
     summary: str
     recommendations: list
+    sheet: str | None = None
+
+    @property
+    def source(self) -> str:
+        return f"{self.name} · worksheet “{self.sheet}”" if self.sheet else self.name
+
+    @property
+    def qualified(self) -> bool:
+        """True when the ledger is too weak for an unqualified certificate."""
+        failed = [name for name, ok, _ in self.checks if not ok]
+        return self.quality["overall"] < QUALITY_FLOOR or bool(failed)
+
+    @property
+    def limitations(self) -> list[str]:
+        out = []
+        if self.quality["overall"] < QUALITY_FLOOR:
+            out.append(f"Composite data quality of {self.quality['overall']:.1f}% is below the {QUALITY_FLOOR:.0f}% floor required for an unqualified opinion.")
+        for name, ok, detail in self.checks:
+            if not ok:
+                out.append(f"Integrity check failed — {name}: {detail}")
+        return out
 
 
 @st.cache_data(ttl="1h", max_entries=4, show_spinner=False)
-def _analyse(raw_bytes: bytes, filename: str, opts: dict) -> dict:
-    """Full analysis for one ledger + cleaning profile, cached as a unit.
+def _analyse(raw_bytes: bytes, filename: str, opts: dict, sheet: str | None) -> dict:
+    """Full analysis for one ledger + worksheet + cleaning profile, cached as a unit.
 
     Cached on the source bytes rather than the frames so a rerun pays a hash
     instead of recomputing ~4s of analytics per widget interaction.
     """
-    raw_df = load_dataset(raw_bytes, filename)
-    clean_df, issue_log, stats = smart_clean(raw_df, **opts)
+    raw_df = load_dataset(raw_bytes, filename, sheet)
+    clean_df, issue_log, changes, stats = smart_clean(raw_df, **opts)
     schema = intel.detect_schema(clean_df)
     quality = intel.quality_report(raw_df, clean_df, stats)
     checks = intel.integrity_checks(clean_df, schema, stats)
@@ -47,6 +72,7 @@ def _analyse(raw_bytes: bytes, filename: str, opts: dict) -> dict:
         "raw_df": raw_df,
         "clean_df": clean_df,
         "issue_log": issue_log,
+        "change_log": changes,
         "stats": stats,
         "schema": schema,
         "quality": quality,
@@ -61,8 +87,13 @@ def get_dataset() -> Dataset | None:
     raw_bytes = st.session_state.get("raw_bytes")
     if raw_bytes is None:
         return None
-    parts = _analyse(raw_bytes, st.session_state["source_name"], {**DEFAULT_OPTS, **st.session_state.get("clean_opts", {})})
-    return Dataset(name=st.session_state["source_name"], hash=fingerprint(raw_bytes), **parts)
+    name = st.session_state["source_name"]
+    sheet = st.session_state.get("sheet")
+    parts = _analyse(raw_bytes, name, {**DEFAULT_OPTS, **st.session_state.get("clean_opts", {})}, sheet)
+    if parts["raw_df"].empty:
+        st.error(f"{'Worksheet “' + sheet + '”' if sheet else 'This file'} has no rows to analyse. Pick another worksheet or upload a different ledger.")
+        st.stop()
+    return Dataset(name=name, hash=fingerprint(raw_bytes), sheet=sheet, **parts)
 
 
 def require_dataset() -> Dataset:

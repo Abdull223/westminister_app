@@ -54,7 +54,22 @@ with col_left:
     else:
         st.caption("No signature captured yet — the PDF will be issued in 'signature pending' state.")
 
-    if st.button("Generate certified PDF", type="primary", icon=":material/description:"):
+    if ds.qualified:
+        st.error(
+            "This ledger does not qualify for an unqualified certificate.",
+            icon=":material/report:",
+        )
+        for reason in ds.limitations:
+            st.caption(f"• {reason}")
+        acknowledged = st.checkbox(
+            "I acknowledge the scope limitations and authorise issuance of a QUALIFIED report only.",
+            key="qual_ack",
+        )
+    else:
+        acknowledged = True
+
+    # `disabled` is only a client-side affordance — re-check server-side before issuing.
+    if st.button("Generate certified PDF", type="primary", icon=":material/description:", disabled=not acknowledged) and acknowledged:
         anomalies = intel.find_anomalies(ds.clean_df, ds.schema)
         with st.spinner("Rendering dashboard charts…"):
             trend_png, breakdown_png = _report_chart_pngs()
@@ -77,6 +92,11 @@ with col_left:
             trend_png=trend_png,
             breakdown_png=breakdown_png,
             partner_title=partner_title,
+            source_label=ds.source,
+            qualified=ds.qualified,
+            limitations=tuple(ds.limitations),
+            changes=tuple(ds.change_log[["Row", "Field", "Before", "After", "Action"]].itertuples(index=False, name=None)),
+            changes_truncated=bool(ds.stats["changes_truncated"]),
         )
 
     pdf = st.session_state.get("cert_pdf")
@@ -93,21 +113,28 @@ with col_left:
 with col_right:
     checks_ok = sum(1 for _, ok, _ in ds.checks if ok)
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+    if pdf:
+        status = "QUALIFIED PDF READY — scope limitations apply" if ds.qualified else "CERTIFIED PDF READY FOR DOWNLOAD"
+        status_color = "#B3382C" if ds.qualified else "#5FB38A"
+    else:
+        status, status_color = "Awaiting PDF generation", "#8FA3B8"
     st.markdown(
         f"""
         <div class="wc-panel" style="padding: 24px; border: 1px solid var(--wc-brass);">
             <h3 style="margin-top: 0;">Westminister Consulting</h3>
-            <p style="color: var(--wc-muted); font-size: 0.85rem;">CERTIFICATE OF FINANCIAL AUDIT</p>
+            <p style="color: var(--wc-muted); font-size: 0.85rem;">{'CERTIFICATE OF FINANCIAL AUDIT — QUALIFIED' if ds.qualified else 'CERTIFICATE OF FINANCIAL AUDIT'}</p>
             <hr style="border-color: var(--wc-line);">
             <p><b>Client:</b> {html.escape(client_name)}</p>
+            <p><b>Source audited:</b> {html.escape(ds.source)}</p>
             <p><b>Signatory:</b> {html.escape(approver_name)} · {html.escape(partner_title)}</p>
             <p><b>Timestamp:</b> {timestamp}</p>
             <p><b>Records processed:</b> {len(ds.clean_df):,}</p>
+            <p><b>Cell-level changes:</b> {ds.stats['cell_changes']:,}</p>
             <p><b>Data quality:</b> {ds.quality['overall']:.1f}% · {checks_ok}/{len(ds.checks)} integrity checks passed</p>
             <p><b>Cryptographic hash:</b></p>
             <div class="wc-hash">{html.escape(ds.hash)}</div>
             <hr style="border-color: var(--wc-line);">
-            <p style="font-size: 0.82rem; color: #5FB38A;">Status: {'✅ CERTIFIED PDF READY FOR DOWNLOAD' if pdf else '⏳ Awaiting PDF generation'}</p>
+            <p style="font-size: 0.82rem; color: {status_color};">Status: {status}</p>
         </div>
         """,
         unsafe_allow_html=True,
