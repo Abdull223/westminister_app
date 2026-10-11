@@ -83,6 +83,22 @@ PAGES = {
             "Section 4 of the certified PDF: the bridge, the month-by-month tie-out, the ten largest exceptions on "
             "each side and the matching criteria used.",
     },
+    "tax": {
+        "What this screen is":
+            "The tax health check working paper — a re-performance of the client's own VAT and withholding figures at "
+            "the rates on their own dates, before a KRA audit finds the differences. It is the domestic tax and "
+            "compliance engagement in software form: tax health check across VAT and withholding, iTax mismatch "
+            "cleanup, and an exposure estimate to argue from.",
+        "How to read it":
+            "Two things must be true before any number here means anything. First, the rate table in the settings "
+            "panel is the user's configuration, not a statement of law — check the rates for the period you are "
+            "working in and edit them. Second, the column mapping must name the right columns. Where the ledger has "
+            "no declared VAT or withholding column the screen labels the figure 'derived', which means "
+            "'this is what the tax would be', never 'this is what the client filed'.",
+        "What it becomes":
+            "The tax exceptions schedule and exposure summary in the certified PDF, and the supporting schedule for "
+            "a VAT re-adjustment, an amended return, a withholding registration or a self-assessment disclosure.",
+    },
     "signoff": {
         "What this screen is":
             "The signed report — the certificate a third party relies on, and the only output of this suite that "
@@ -110,11 +126,12 @@ TITLES = {
     "quarantine": "Exception quarantine",
     "pivot": "Pivot & explore",
     "reconcile": "Bank reconciliation",
+    "tax": "Tax health check",
     "signoff": "Partner sign-off",
 }
 
 # Order a client actually walks through them, landing page only.
-WORKFLOW = ("dashboard", "reconcile", "forensics", "quarantine", "findings", "signoff")
+WORKFLOW = ("dashboard", "reconcile", "tax", "forensics", "quarantine", "findings", "signoff")
 
 
 def outputs() -> None:
@@ -640,9 +657,313 @@ def exceptions(bank_only, ledger_only, dupes) -> None:
     band(rows)
 
 
+# ---------- tax health check ----------
+
+_SLOT_LABELS = {
+    "date": "date", "vat": "declared VAT", "wht": "withholding", "net": "net of tax", "gross": "gross",
+    "code": "tax code", "pin": "taxpayer PIN", "doc": "document number", "payees": "payee name",
+}
+
+
+def tax_setup(res) -> None:
+    cols = res["cols"]
+    named = [f"{_SLOT_LABELS[k]} → “{cols[k]}”" for k in _SLOT_LABELS if cols.get(k)]
+    missing = [label for key, label in _SLOT_LABELS.items() if not cols.get(key)]
+    rows = [(
+        "What the engine was actually handed",
+        (", ".join(named) if named else "nothing recognisable") + ". Every exception on this page is computed from "
+        "those columns and the rate table, which is why the mapping is shown rather than assumed. If one of them "
+        "names the wrong column, change it above and the whole page re-computes — nothing here is cached against a "
+        "guess.",
+    )]
+    if missing:
+        rows.append((
+            "What it therefore cannot test",
+            "No column was found for " + ", ".join(missing) + ". The corresponding check reports that honestly "
+            "instead of inventing a figure: a tax screen that quietly fills its own gaps is worse than no screen, "
+            "because it gets quoted.",
+        ))
+    if res["unparsed_dates"]:
+        rows.append((
+            f"{res['unparsed_dates']:,} date(s) the engine could not read",
+            "Those lines were still tested, but against the schedule's default rate rather than the rate on their "
+            "own date. If the rate moved inside your period that is the one place this page can be wrong, and it is "
+            "fixable by cleaning the date column.",
+        ))
+    band(rows, "What this run was working from")
+
+
+def tax_vat(vat) -> None:
+    basis = vat["basis"]
+    if basis == "none":
+        band([("VAT was not tested", vat["note"])], "What the VAT test tells you")
+        return
+    if basis == "derived":
+        band([
+            ("A shape, not a return",
+             f"Output VAT of {_money(vat['vat_derived'])} here is a derived figure: the ledger has no VAT column, so the "
+             f"engine took {_money(vat['gross_inclusive'])} of gross value across {vat['rows_tested']:,} lines and "
+             "backed tax out of all of it at the configured rate. That is a legitimate scoping number — it says what "
+             "the order of magnitude is if everything was standard-rated — and it is not a figure anybody filed, so "
+             "it must not appear in an objection or a refund claim as though it did."),
+            ("What to do with it",
+             "Take the filed returns and the supplier invoices labelled with their tax codes, load them as the VAT "
+             "column, and this same test becomes a re-performance instead of an estimate. Until then the honest "
+             "sentence to the client is: we have sized the exposure, we have not proved it."),
+            ("The finding inside the gap",
+             "A purchase ledger with no VAT column is itself worth reporting. Either the tax sits in a separate "
+             "return file the ledger cannot be tied to, or the business is not separating VAT at all — and the "
+             "second is the one that becomes an assessment."),
+        ], "What the VAT test tells you")
+        return
+
+    rows = [(
+        "The headline",
+        f"{vat['exceptions']:,} of {vat['rows_tested']:,} line(s) fail recomputation against the rate in force on "
+        "their own date. This is the useful framing for a client conversation: not 'is the VAT total roughly right' "
+        "but 'which documents would be pulled first, and what does each one cost'."),
+    ]
+    if vat["exceptions"]:
+        mix = vat["table"]["Issue"].value_counts().head(3)
+        rows.append((
+            "What the exceptions are made of",
+            "; ".join(f"{int(n)} × {issue}" for issue, n in mix.items())
+            + ". A handful of recurring issue types is a systems or training problem and fixes in one pass; a table "
+              "of fifteen unrelated problems is a bookkeeping problem and takes longer.",
+        ))
+        if vat["under_declared"]:
+            rows.append((
+                "Under-declared — the direction KRA assesses",
+                f"{_money(vat['under_declared'])} of VAT was charged as less than the rate required, or not charged "
+                "where it should have been. This is the number that grows penalties and interest, and it is the "
+                "number a self-assessment disclosure has to cover."),
+            )
+        if vat["over_declared"]:
+            rows.append((
+                "Over-declared — the direction nobody chases",
+                f"{_money(vat['over_declared'])} of VAT was booked above what the rate supports. That is not a "
+                "penalty risk, it is cash: output VAT charged to customers and never properly owed, or input VAT "
+                "understated on a line that should have carried more. Fixing the schedule should recover it, and a "
+                "health check that only reported the first direction would be an argument for the tax authority."),
+            )
+    else:
+        rows.append((
+            "A clean result, and its limit",
+            f"All {vat['rows_tested']:,} lines with declared VAT foot to the rate table on their own dates. That is "
+            "arithmetic, not absolution: the test cannot know whether a supply was *correctly classified* as "
+            "standard or zero-rated, nor whether a return was filed on time. Those need the contract terms and the "
+            "iTax ledger, not this file.",
+        ))
+    band(rows, "What the VAT test tells you")
+
+
+def tax_control(control) -> None:
+    if not control["months"]:
+        band([("The control account could not be built", control["note"])], "What the VAT control account tells you")
+        return
+    rows = [(
+        "Why this schedule exists",
+        f"The VAT control account is the monthly position — output VAT less input VAT, restated from the ledger into "
+        f"return periods. Summed over {control['months']} month(s) it comes to {_money(control['net_total'])}, "
+        + ("a net payable: VAT collected and owed." if control["net_total"] >= 0 else "net recoverable: VAT paid and "
+           "never claimed back.") + " This is the figure a filed return has to agree with. If it does not, the "
+        "difference is either a posting error in the ledger or a return made on something else."),
+    ]
+    rows.append((
+        "How output and input were separated",
+        f"Using {control['basis']}. "
+        + ("That is a rule the file itself states, so the split is evidence. " if control["basis"].startswith("column")
+           else "That rule is the engine's reading of the file rather than a column the client maintains, so treat "
+                "the split as indicative: the total VAT may still be right while its allocation between output and "
+                "input is not. Ask for the VAT control account from the general ledger and this becomes a "
+                "reconciliation instead of an inference."),
+    ))
+    if control["derived"]:
+        rows.append((
+            "Labelled derived",
+            "There is no VAT column in this ledger, so each month's tax was computed from the amounts at the "
+            "configured rate. The shape of the profile — which months were busy, where the activity stops — is real; "
+            "the shilling figures are estimates and are printed as such.",
+        ))
+    if control["gap_months"]:
+        rows.append((
+            f"{len(control['gap_months'])} silent month(s): " + ", ".join(_month(m) for m in control["gap_months"][:6]),
+            "No VATable line at all in those periods inside a span that is otherwise active. Two explanations and "
+            "both are findings: activity happened and was not recorded, or a return was filed for the period from "
+            "somewhere outside this ledger. A nil return is a filing event; an empty month in the books is not one.",
+        ))
+    band(rows, "What the VAT control account tells you")
+
+
+def tax_wht(wht) -> None:
+    if not wht["wht_heads"]:
+        band([("Withholding was not tested", wht["note"])], "What the withholding test tells you")
+        return
+    rows = [(
+        "The scope, and why it is narrow",
+        f"{wht['expense_lines']:,} of the lines here are expenses, and {wht['wht_heads']:,} of those describe a "
+        "service head that attracts withholding — consultancy, professional fees, management and directors' fees, "
+        "rent, other services. Everything else was left alone deliberately. A screen that flagged every purchase as "
+        "a withholding risk gets ignored; the list below is the short part of the ledger that carries the tax.",
+    )]
+    if len(wht["table"]):
+        rows.append((
+            "The shortfall",
+            f"{len(wht['table']):,} line(s) fall short of the required withholding by {_money(wht['unwithheld'])} in "
+            f"total, against {_money(wht['declared_total'])} actually deducted."
+            + (" The ledger carries a withholding column, so these are declared-versus-expected differences on named "
+               "documents — the strongest form of this finding."
+               if wht["basis"] == "declared" else
+               " The ledger carries no withholding column at all, so the test assumes nobody withheld. Confirm that "
+               "against the WHT returns before the number leaves this room; it may live in a separate filing."),
+        ))
+        rows.append((
+            "Whose liability it is",
+            "Withholding is deducted from the payee but accounted for by the payer, so a shortfall above is this "
+            "company's own cost even though the tax was always somebody else's. The second-order exposure is worse "
+            "than the first: an expense suffered without the required withholding can be disallowed as a deduction, "
+            "which puts tax on the grossed-up amount as well as the withheld sum.",
+        ))
+    else:
+        extra = (
+            " The ledger does carry a withholding column, so this was a comparison against declared figures rather "
+            "than an assumption about them."
+            if wht["basis"] == "declared" else
+            " Note that the ledger carries no withholding column, so agreement here means the schedule expects no "
+            "withholding on these heads — it is not evidence that certificates were issued."
+        )
+        rows.append(("Nothing short",
+                     f"All {wht['wht_heads']:,} withholding-head line(s) agree with the schedule you configured, to "
+                     f"within fifty sen.{extra}"))
+    if len(wht["register"]):
+        rows.append((
+            "What the certificate register is for",
+            f"{len(wht['register']):,} payee(s) are owed a withholding certificate for the tax that should have been "
+            "deducted, each with a remittance due date computed as the twentieth of the month following payment. The "
+            "due dates are the filing obligation, and they exist whether or not anybody withheld — so this table "
+            "doubles as the overdue-filing list and the document pack a payee will ask for.",
+        ))
+    band(rows, "What the withholding test tells you")
+
+
+def tax_pins(pins) -> None:
+    if not pins["populated"] and not len(pins["table"]):
+        band([("Supplier identity was not tested", pins["note"])], "What the supplier PIN test tells you")
+        return
+    rows = [(
+        "Coverage before conclusions",
+        f"{pins['coverage']}% of lines carry a PIN ({pins['populated']:,} of them). The unpopulated part is the real "
+        "story: a supplier record with no taxpayer identification cannot be matched to the KRA register, cannot be "
+        "reconciled against e-TIMS, and is the first thing an officer disallows when a deduction is challenged.",
+    )]
+    if len(pins["table"]):
+        rows.append((
+            f"{len(pins['table'])} PIN(s) that fail the shape test",
+            f"{pins['malformed']} do not look like an issued PIN at all; {pins['placeholders']} are placeholders "
+            "(a digit run like A000000000A typed into a mandatory field so a posting would go through). Placeholder "
+            "PINs are a control finding on their own, independent of tax: a required field being bypassed means the "
+            "supplier master is not being checked by anybody.",
+        ))
+    if pins["shared"]:
+        rows.append((
+            f"{pins['shared']} PIN(s) shared across different payee names",
+            "One registration invoicing under two names is either a mis-keyed PIN or a supplier trading as somebody "
+            "other than the entity KRA registered. Both produce iTax mismatches between what the supplier declares as "
+            "sales and what the buyer declares as purchases, which is the audit trigger that ends in a "
+            "non-deductible expense. Resolve by name, not by assuming a typo.",
+        ))
+    multi = pins["pin_per_payee"]
+    if len(multi) and int(multi["Distinct PINs"].max()) > 1:
+        rows.append((
+            "The same payee invoicing under several PINs",
+            f"{int(multi['Distinct PINs'].max())} distinct PINs appear against one supplier name at the top of that "
+            "list — the mirror image of the shared-PIN problem, and usually a group of entities billed to one "
+            "trading name. Pick the correct registration per contract and keep the evidence of the choice.",
+        ))
+    band(rows, "What the supplier PIN test tells you")
+
+
+def tax_sequence(seq) -> None:
+    if not seq["groups"]:
+        band([("Document sequence was not tested", seq["note"])], "What the sequence test tells you")
+        return
+    rows = [(
+        "What is being counted",
+        f"{seq['groups']} series read as {seq['read_by']}, covering {seq['coverage']}% of lines. {seq['gaps']} "
+        f"number gap(s), {seq['repeats']} repeated number(s) and {seq['inversions']} date inversion(s). The reading "
+        "matters as much as the count: a company that runs separate series for branches and suppliers is not gapping, "
+        "and an engine that groups everything into one sequence will manufacture exceptions out of an orderly file.",
+    )]
+    if seq["gaps"]:
+        rows.append((
+            "Gaps",
+            "A missing invoice number is not proof of anything by itself — cancelled documents, a number block held "
+            "back for a branch, or a system re-code all produce them. What makes it a tax question is e-TIMS: every "
+            "issued invoice has to transmit, so each gap needs either the document or the cancellation note as the "
+            "answer. Work the largest jump first; a gap of forty is a different conversation from a gap of one.",
+        ))
+    if seq["repeats"]:
+        rows.append((
+            "Repeated numbers",
+            "The same document number used twice is either a duplicate posting or two different invoices carrying one "
+            "number. The second is the risk: it is how a value change on an already-issued invoice gets into the "
+            "books without a new document. Cross-check these against the near-duplicate register on the forensics "
+            "page, which pairs on amount and counterparty rather than on number.",
+        ))
+    if seq["inversions"]:
+        rows.append((
+            "Dates running backwards inside a series",
+            "Sequential document numbers whose dates go backwards are the signature of backdating — a document "
+            "created later and dated earlier, typically to move income or a claim between periods. One inversion is "
+            "often a data-entry error; a run of them, or an inversion that crosses a period or rate boundary, is a "
+            "finding you should be able to explain in writing before an assessment does it for you.",
+        ))
+    band(rows, "What the sequence test tells you")
+
+
+def tax_exposure(exp, vat, wht) -> None:
+    if not exp["total"]:
+        band([
+            ("Nothing to expose",
+             "No under-declared VAT and no unwithheld tax were found on this run, so there is no assessment figure "
+             "to build. That is a statement about what this file supports, not a guarantee of compliance — see the "
+             "basis labels on the VAT and withholding tabs for what was estimated rather than tested."),
+        ], "What the exposure summary tells you")
+        return
+    rates = exp.get("rates") or {}
+    rows = [
+        ("What this number is",
+         f"A provisioning and negotiating figure, not an assessment: {_money(exp['tax'])} of tax at risk, "
+         f"{_money(exp['penalty'])} of penalty and {_money(exp['interest'])} of interest over "
+         f"{exp['months']:g} month(s) outstanding, totalling {_money(exp['total'])}. Nobody has assessed this and no "
+         "penalty has been imposed. Its value is that it is defensible arithmetic, so a client can decide what to "
+         "disclose and what to provide for before an audit sets both for them."),
+        ("Which assumptions are yours, not the engine's",
+         "The rates come from the schedule you configured (late filing "
+         f"{rates.get('filing_pct', 0):g}%, late payment {rates.get('payment_pct', 0):g}%, interest "
+         f"{rates.get('interest_pm', 0):g}% per month), and the months outstanding are a slider on this page. Change "
+         "either and this total moves, so quote the total with the assumptions attached — and re-check them against "
+         "the current law for the period in question, which this suite does not and cannot know."),
+        ("What is deliberately not netted off",
+         f"Under-declared VAT of {_money(vat.get('under_declared', 0.0))} is carried at full value even where this "
+         f"same file also shows {_money(vat.get('over_declared', 0.0))} over-declared, and withholding of "
+         f"{_money(wht.get('unwithheld', 0.0))} is added rather than offset. An authority assesses the shortfalls and "
+         "leaves you to claim the overpayments separately, in a different process, often on a time limit. A total "
+         "that netted the two would flatter the position."),
+    ]
+    if vat["basis"] != "declared":
+        rows.append((
+            "Why VAT contributes nothing here",
+            "The VAT half of this exposure is zero because the ledger carries no declared VAT column to recompute, so "
+            "the engine will not pretend to know what was under-declared. The withholding figure stands on its own. "
+            "Load the returns or a VAT column and the exposure roughly doubles its claim to be real.",
+        ))
+    band(rows, "What the exposure summary tells you")
+
+
 # ---------- sign-off ----------
 
-def signoff(ds, qualified: bool, limitations, recon) -> None:
+def signoff(ds, qualified: bool, limitations, recon, tax=None) -> None:
     rows = [(
         "What is actually being signed",
         f"{len(ds.clean_df):,} records of {ds.source}, fingerprint {ds.hash[:16]}… , quality "
@@ -662,6 +983,30 @@ def signoff(ds, qualified: bool, limitations, recon) -> None:
         rows.append(("Reconciliation status",
                      f"The bridge does not foot ({_money(recon['stats']['residual'])} unexplained), so the report "
                      "carries that as a written limitation and can only be issued qualified."))
+    if tax is None:
+        rows.append(("Tax health check",
+                     "The tax health check was never run for this ledger, so the report makes no statement about VAT "
+                     "or withholding. That is not a clean bill of health — it is simply a page nobody turned. If the "
+                     "engagement has a compliance angle, run it before this certifies anything."))
+    elif tax["exposure"]["total"]:
+        rows.append((
+            "Tax health check",
+            f"VAT and withholding were re-performed on {tax['rows']:,} line(s) at the schedule the preparer "
+            f"configured, producing {_money(tax['exposure']['total'])} of exposure"
+            + (" — which the report carries as a written limitation because it clears the 1% materiality floor on the "
+               "value tested. A statutory liability that has not been remitted or provided for is disclosed, not "
+               "buried in an exception tab."
+               if any(lim.startswith("Tax health check") for lim in limitations) else
+               ", below the materiality floor, so it is disclosed in the tax section without qualifying the "
+               "certificate.")
+            + " Either way the certificate now says what the ledger's tax position is worth, and on which "
+              "assumptions."))
+    else:
+        rows.append((
+            "Tax health check",
+            f"VAT and withholding were re-performed on {tax['rows']:,} line(s) and nothing material surfaced. Where "
+            "the VAT basis on that page reads 'derived', this statement is weaker than it looks: it means no declared "
+            "figure was available to contradict, not that the returns were proved correct."))
     if qualified:
         rows.append((
             "Before you issue",

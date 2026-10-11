@@ -8,7 +8,7 @@ import pathlib
 import streamlit as st
 
 from core import theme
-from core.data import make_sample_csv, make_sample_statement_csv, sheet_names
+from core.data import make_sample_csv, make_sample_statement_csv, make_sample_tax_csv, sheet_names
 
 st.set_page_config(
     page_title="Westminister Intelligence Suite — Kenya",
@@ -30,6 +30,12 @@ def _load_sample():
     st.session_state.pop("sheet", None)
 
 
+def _load_tax_sample():
+    st.session_state.raw_bytes = make_sample_tax_csv()
+    st.session_state.source_name = "sample_tax_ledger.csv"
+    st.session_state.pop("sheet", None)
+
+
 def _on_upload():
     uploaded = st.session_state.get("ledger_file")
     if uploaded is not None:
@@ -39,7 +45,7 @@ def _on_upload():
 
 
 def _clear_dataset():
-    for key in ("raw_bytes", "source_name", "cert_pdf", "sheet", "recon_report"):
+    for key in ("raw_bytes", "source_name", "cert_pdf", "sheet", "recon_report", "tax_report"):
         st.session_state.pop(key, None)
 
 
@@ -66,6 +72,8 @@ with st.sidebar:
     st.markdown("### Data ingestion")
     st.file_uploader("Excel / CSV ledger", type=["csv", "xlsx"], key="ledger_file", on_change=_on_upload)
     st.button("Load sample Kenya ledger", icon=":material/bolt:", width="stretch", on_click=_load_sample)
+    st.button("Load sample VAT & WHT ledger", icon=":material/receipt_long:", width="stretch", on_click=_load_tax_sample,
+              help="A purchase/sales ledger carrying VAT, withholding, tax codes and supplier PINs — the tax health check page reads every statutory test from it.")
     raw = st.session_state.get("raw_bytes")
     if raw is not None:
         sheets = sheet_names(raw, st.session_state["source_name"])
@@ -123,6 +131,7 @@ page = st.navigation(
         st.Page("app_pages/findings.py", title="AI findings", icon=":material/fact_check:"),
         st.Page("app_pages/forensics.py", title="Forensics", icon=":material/query_stats:"),
         st.Page("app_pages/reconcile.py", title="Reconciliation", icon=":material/account_balance:"),
+        st.Page("app_pages/tax.py", title="Tax health check", icon=":material/receipt_long:"),
         st.Page("app_pages/quarantine.py", title="Quarantine", icon=":material/shield:"),
         st.Page("app_pages/signoff.py", title="Sign-off & PDF", icon=":material/draw:"),
     ],

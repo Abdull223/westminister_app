@@ -22,8 +22,25 @@ if recon and not recon["stats"]["foots"]:
         f"Bank reconciliation of {recon['statement']} does not foot — KES {recon['stats']['residual']:,.2f} of value is "
         "unexplained after pairing, timing and bundling. An unreconciled bank difference is never certified.",
     )
-qualified = ds.qualified or bool(recon_limits)
-limitations = tuple(ds.limitations) + recon_limits
+
+# A tax health check is evidence only about the ledger it was run against.
+tax = st.session_state.get("tax_report")
+if tax and tax.get("ledger_hash") != ds.hash:
+    tax = None
+tax_limits: tuple = ()
+if tax:
+    # Material exposure is judged against the value actually tested, not a fixed shilling figure, so a large ledger is
+    # not failed for a rounding-level difference and a small one is not failed for a rounding-level percentage.
+    exposure_total = float(tax["exposure"]["total"])
+    material_floor = 0.01 * float(tax["value_tested"])
+    if exposure_total and exposure_total >= material_floor:
+        tax_limits = (
+            f"Tax health check quantified KES {exposure_total:,.2f} of unremitted VAT and withholding against a 1% "
+            f"materiality floor of KES {material_floor:,.2f} on the value tested. Statutory exposure that has not been "
+            "provided for or remitted is certified as a liability, not a rounding.",
+        )
+qualified = ds.qualified or bool(recon_limits) or bool(tax_limits)
+limitations = tuple(ds.limitations) + recon_limits + tax_limits
 
 st.title("Partner sign-off & certified PDF")
 st.caption("Draw the partner signature, then generate the immutable executive audit report.")
@@ -32,6 +49,13 @@ if recon:
         f"Report includes the bank reconciliation of {recon['statement']} — "
         f"{recon['stats']['match_rate']:.1f}% of bank lines tied, bridge "
         + ("foots." if recon["stats"]["foots"] else f"does NOT foot (KES {recon['stats']['residual']:,.2f} unexplained) and qualifies the report.")
+    )
+if tax:
+    _exp = tax["exposure"]["total"]
+    st.caption(
+        f"Report includes the tax health check of {tax['rows']:,} line(s) — "
+        + (f"KES {_exp:,.2f} exposure on the configured schedule" if _exp else "no statutory exposure quantified on this basis")
+        + (" and that exposure qualifies the report." if tax_limits else ".")
     )
 explain.page("signoff")
 
@@ -119,6 +143,7 @@ with col_left:
             changes=tuple(ds.change_log[["Row", "Field", "Before", "After", "Action"]].itertuples(index=False, name=None)),
             changes_truncated=bool(ds.stats["changes_truncated"]),
             recon=recon,
+            tax=tax,
         )
 
     pdf = st.session_state.get("cert_pdf")
@@ -147,6 +172,17 @@ with col_right:
             f"{html.escape(recon['statement'])} · {recon['stats']['match_rate']:.1f}% of bank lines tied · bridge "
             + ("foots" if recon["stats"]["foots"] else f"<b style='color:#B3382C'>does not foot</b>")
         )
+    if tax is None:
+        tax_line = "not performed — open the tax health check page to run it"
+    else:
+        _exp = tax["exposure"]["total"]
+        if not _exp:
+            amount = "no statutory exposure quantified on this basis"
+        elif tax_limits:
+            amount = f"<b style='color:#B3382C'>KES {_exp:,.2f} exposure, qualifies this report</b>"
+        else:
+            amount = f"KES {_exp:,.2f} exposure, below the materiality floor"
+        tax_line = f"{tax['rows']:,} line(s) re-performed · {amount} · VAT basis {html.escape(tax['vat']['basis'])}"
     st.markdown(
         f"""
         <div class="wc-panel" style="padding: 24px; border: 1px solid var(--wc-brass);">
@@ -156,6 +192,7 @@ with col_right:
             <p><b>Client:</b> {html.escape(client_name)}</p>
             <p><b>Source audited:</b> {html.escape(ds.source)}</p>
             <p><b>Bank reconciliation:</b> {recon_line}</p>
+            <p><b>Tax health check:</b> {tax_line}</p>
             <p><b>Signatory:</b> {html.escape(approver_name)} · {html.escape(partner_title)}</p>
             <p><b>Timestamp:</b> {timestamp}</p>
             <p><b>Records processed:</b> {len(ds.clean_df):,}</p>
@@ -169,4 +206,4 @@ with col_right:
         """,
         unsafe_allow_html=True,
     )
-    explain.signoff(ds, qualified, limitations, recon)
+    explain.signoff(ds, qualified, limitations, recon, tax)

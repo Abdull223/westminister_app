@@ -53,6 +53,7 @@ def generate_audit_pdf(
     changes: tuple = (),
     changes_truncated: bool = False,
     recon: dict | None = None,
+    tax: dict | None = None,
 ) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_LEFT
@@ -133,6 +134,9 @@ def generate_audit_pdf(
         meta_rows.append(("Source audited", _esc(source_label)))
     if recon:
         meta_rows.append(("Bank statement tied", _esc(recon["statement"])))
+    if tax:
+        _te = tax["exposure"]
+        meta_rows.append(("Tax health check", f"{tax['rows']:,} line(s) tested · exposure KES {_te['total']:,.2f}" if _te["total"] else f"{tax['rows']:,} line(s) tested · no exposure quantified"))
     meta_rows += [
         ("Signatory partner", _esc(approver_name)),
         ("Audit timestamp", _esc(timestamp)),
@@ -207,6 +211,24 @@ def generate_audit_pdf(
     # ---- 4. Integrity checks ----
     story.append(h2("Integrity checks"))
     th = ParagraphStyle("th", parent=body_style, textColor=colors.white)
+
+    def rtable(header, rows, widths, right=()):
+        data = [[Paragraph(f"<b>{h}</b>", th) for h in header]]
+        for r in rows:
+            data.append([Paragraph(_esc(v), body_style) for v in r])
+        t = Table(data, colWidths=widths)
+        style = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0C2238")),
+            ("PADDING", (0, 0), (-1, -1), 5),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("GRID", (0, 0), (-1, -1), 0.5, border_line),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, bg_card]),
+        ]
+        for col in right:
+            style.append(("ALIGN", (col, 1), (col, -1), "RIGHT"))
+        t.setStyle(TableStyle(style))
+        return t
+
     check_rows = [[Paragraph(f"<b>{h}</b>", th) for h in ("Check", "Result", "Detail")]]
     for name, passed, detail in checks:
         verdict = f"<font color='#1E7A46'><b>PASS</b></font>" if passed else f"<font color='#B3382C'><b>FAIL</b></font>"
@@ -225,23 +247,6 @@ def generate_audit_pdf(
     # ---- Bank reconciliation ----
     if recon:
         rs, crit = recon["stats"], recon["criteria"]
-
-        def rtable(header, rows, widths, right=()):
-            data = [[Paragraph(f"<b>{h}</b>", th) for h in header]]
-            for r in rows:
-                data.append([Paragraph(_esc(v), body_style) for v in r])
-            t = Table(data, colWidths=widths)
-            style = [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0C2238")),
-                ("PADDING", (0, 0), (-1, -1), 5),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("GRID", (0, 0), (-1, -1), 0.5, border_line),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, bg_card]),
-            ]
-            for col in right:
-                style.append(("ALIGN", (col, 1), (col, -1), "RIGHT"))
-            t.setStyle(TableStyle(style))
-            return t
 
         story.append(h2("Bank reconciliation"))
         stmt_hash = _esc(recon["statement_hash"]).removeprefix("SHA256:")
@@ -311,6 +316,110 @@ def generate_audit_pdf(
 
         story.append(Paragraph("Reconciliation findings", h3_style))
         for finding in recon["findings"]:
+            story.append(Paragraph(f"• {_esc(finding)}", body_style))
+        story.append(Spacer(1, 10))
+
+    # ---- Tax health check ----
+    if tax:
+        tv, tc, tw, tp, tseq, te = tax["vat"], tax["control"], tax["wht"], tax["pins"], tax["sequence"], tax["exposure"]
+        story.append(h2("Tax health check"))
+        span = f"{tax['span'][0]} to {tax['span'][1]}" if tax["span"] else "no readable dates"
+        cols_txt = ", ".join(f"{k} = “{_esc(v)}”" for k, v in tax["columns"].items()) or "no columns mapped"
+        r_from, r_last = tax["rate_span"]
+        rate_txt = (f"{r_from:.0f}% at the start of the period, {r_last:.0f}% at the end" if r_from is not None and r_last is not None else "not configured")
+        story.append(Paragraph(
+            f"Statutory exception testing was performed on <b>{_esc(tax['ledger'])}</b> — {tax['rows']:,} line(s) "
+            f"tested as recorded, {span} — reading {cols_txt}. Each line was recomputed at the rate in force on its own "
+            f"date from the schedule printed at the end of this section (standard VAT {rate_txt} across the period). "
+            "<b>Those rates are a configured working assumption, not a statement of law, and this section is not tax "
+            "advice</b>: confirm the schedule against the law in force for the period before any figure here is "
+            "relied upon, filed or negotiated.",
+            body_style,
+        ))
+        if tax["unparsed_dates"]:
+            story.append(Paragraph(
+                f"<i>{tax['unparsed_dates']:,} line(s) carry a date this test could not read; they were assessed at the "
+                "schedule's default rate rather than the rate on their own date.</i>",
+                body_style,
+            ))
+        if tv["basis"] == "derived":
+            story.append(Paragraph(
+                f"<i>VAT basis: derived. The ledger carries no declared VAT column, so output VAT of "
+                f"KES {tv['vat_derived']:,.2f} is what the file implies if every line were standard-rated. It is a "
+                "sizing assumption, not a figure anyone filed, and no VAT exception count can be reported from it.</i>",
+                body_style,
+            ))
+        elif tv["basis"] == "none":
+            story.append(Paragraph("<i>VAT basis: not testable — no amount column was available to recompute.</i>", body_style))
+
+        exposure_line = (
+            f"tax KES {te['tax']:,.2f} + penalty KES {te['penalty']:,.2f} + interest KES {te['interest']:,.2f} "
+            f"over {te['months']:g} month(s) = <b>KES {te['total']:,.2f}</b>"
+            if te["total"] else "nil on the exceptions found"
+        )
+        story.append(card_table(
+            [
+                [Paragraph(f"<b>{k}:</b>", body_style), Paragraph(v, body_style)]
+                for k, v in (
+                    ("VAT lines recomputed", f"{tv['tested']:,} line(s) on a <b>{tv['basis']}</b> basis"),
+                    ("VAT exceptions", f"{tv['exceptions']:,} line(s) — KES {tv['under_declared']:,.2f} under-declared, "
+                                       f"KES {tv['over_declared']:,.2f} over-declared"),
+                    ("VAT control account", f"{tc['months']} return period(s), net KES {tc['net_total']:,.2f}"
+                                            + (" · derived figures" if tc["derived"] else "")),
+                    ("Periods with no VATable activity", ", ".join(_esc(m) for m in tc["gap_months"]) or "none"),
+                    ("Withholding tested", f"{tw['heads']:,} service line(s) of {tw['expense_lines']:,} expense line(s), "
+                                           f"basis <b>{tw['basis']}</b>"),
+                    ("Withholding shortfall", f"{tw['short_lines']:,} line(s) short by KES {tw['unwithheld']:,.2f} · "
+                                              f"{tw['certificates']:,} certificate(s) owed"),
+                    ("Supplier PINs", f"{tp['coverage']:g}% of lines carry a PIN · {tp['flagged']:,} malformed or "
+                                      f"placeholder · {tp['shared']:,} shared across payees"),
+                    ("Document sequence", f"{tseq['gaps']:,} gap(s), {tseq['repeats']:,} repeat(s), "
+                                          f"{tseq['inversions']:,} inversion(s) across {tseq['groups']:,} series"),
+                    ("Exposure on these assumptions", exposure_line),
+                )
+            ],
+            [240, 280],
+        ))
+        story.append(Spacer(1, 10))
+
+        if tv["top"]:
+            story.append(Paragraph("Largest VAT exceptions", h3_style))
+            story.append(rtable(
+                ("Source row", "Date", "Issue", "Net", "VAT difference"),
+                [(f"row {row}", dt, issue, f"{net:,.2f}", f"{diff:,.2f}") for row, dt, issue, net, _rate, diff in tv["top"]],
+                [55, 62, 218, 85, 85],
+                right=(3, 4),
+            ))
+            story.append(Paragraph(
+                "A positive difference is VAT short on that document; a negative one is VAT booked above what the rate "
+                "supports, which is recoverable rather than assessable.",
+                body_style,
+            ))
+
+        if tw["top"]:
+            story.append(Paragraph("Largest withholding shortfalls", h3_style))
+            story.append(rtable(
+                ("Source row", "Date", "Payee", "Head", "Base", "Short"),
+                [(f"row {row}", dt, payee, head, f"{base:,.2f}", f"{short:,.2f}") for row, dt, payee, head, base, _rate, short in tw["top"]],
+                [50, 58, 118, 118, 78, 78],
+                right=(4, 5),
+            ))
+
+        story.append(Paragraph("Rate schedule applied", h3_style))
+        story.append(rtable(
+            ("Tax", "Head", "Rate %", "From", "To"),
+            [(name, head, f"{rate:g}", frm, to) for name, head, rate, frm, to in tax["schedule"]],
+            [70, 190, 60, 90, 90],
+            right=(2,),
+        ))
+        story.append(Paragraph(
+            "This table is the sole authority for every figure in this section. It was entered by the preparer on the "
+            "date of this report and is printed so a reader can re-perform the arithmetic or reject the assumptions.",
+            body_style,
+        ))
+
+        story.append(Paragraph("Tax health check findings", h3_style))
+        for finding in tax["findings"]:
             story.append(Paragraph(f"• {_esc(finding)}", body_style))
         story.append(Spacer(1, 10))
 

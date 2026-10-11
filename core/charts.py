@@ -64,6 +64,21 @@ def bar_h(df: pd.DataFrame, x: str, y: str, title: str) -> alt.Chart:
     )
 
 
+def grouped_bars(df: pd.DataFrame, x: str, y: str, series: str, title: str, order=None) -> alt.Chart:
+    """Two or three legs per period, in the period order the file gives rather than by size."""
+    return (
+        alt.Chart(df)
+        .mark_bar()
+        .encode(
+            x=alt.X(f"{x}:N", title=None, sort=list(order) if order is not None else df[x].unique().tolist()),
+            y=alt.Y(f"{y}:Q", title=None),
+            color=alt.Color(f"{series}:N", title=None, scale=alt.Scale(range=[BRASS, "#4FA3C7", "#C46B5C"])),
+            tooltip=[x, series, y],
+        )
+        .properties(title=title, height=300)
+    )
+
+
 def scatter(df: pd.DataFrame, x: str, y: str, title: str) -> alt.Chart:
     return (
         alt.Chart(df)
